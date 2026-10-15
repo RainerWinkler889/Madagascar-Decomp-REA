@@ -142,10 +142,42 @@ const char* GetBTFBScriptInquiryName(EBTFBScriptInquiry inq);
 // Lookup inquiry index by token name
 int32_t FindBTFBScriptInquiry(const char* name);
 
-// 0x00413500: Führt ein BTFB-Script-Kommando anhand seines Befehls-Hashes aus
+// Canonical RWS Script Behavior descriptor identifiers
+enum ERWSBehaviorType {
+    RWS_BEHAVIOR_SET_BEHAVIOR = 0, // 0x005CE3AC: "set behavior"
+    RWS_BEHAVIOR_SPAWN,           // 0x005CE3F8: "spawn"
+    RWS_BEHAVIOR_SPAWN_ACTOR,     // 0x005CE400: "spawn actor"
+    RWS_BEHAVIOR_NEW_BEHAVIOR,    // 0x005CE568: "new behavior"
+    RWS_BEHAVIOR_RUN_AS_PLAYER,   // 0x005CEEDC: "run as player"
+    RWS_BEHAVIOR_COUNT
+};
+
+const char* GetRWSBehaviorName(ERWSBehaviorType type);
+int32_t FindRWSBehavior(const char* name);
+
+// 0x004133E0 / 0x00413500: Geometric Convex Trigger Volume Boundary Planes
+struct CTriggerBoundaryPlane {
+    float normal[3]; // Nx, Ny, Nz
+    float distance;  // D
+};
+
+struct CTriggerVolumeNode {
+    CTriggerVolumeNode*   pNext;              // +0x00: Next node in list
+    float                 normal[3];          // +0x04: Base plane normal (Nx, Ny, Nz)
+    float                 distance;           // +0x10: Base plane distance (D)
+    CTriggerBoundaryPlane boundaryPlanes[4];  // +0x14..0x53: 4 boundary planes (16 floats)
+};
+
+// Global active trigger volume list head in Game.exe
+extern CTriggerVolumeNode* g_pTriggerVolumeHead; // 0x00617E78
+
+// 0x004133E0 (inner loop 0x00413500): Evaluates if entity's bounding quad satisfies trigger planes
+bool EvaluateTriggerVolumePlanes(const void* pEntity);
+
+// 0x00413500 / 0x004133E0: Führt ein BTFB-Script-Kommando / Trigger-Volumen anhand seines Befehls-Hashes aus
 void ExecuteScriptCmd(uint32_t dwCommandHash);
 
-// Führt ein BTFB-Script-Kommando anhand seines Textnamens aus
+// Führt ein BTFB-Script-Kommando anhand seines Textnamens aus (prüft Inquiries & RWS Behaviors)
 bool ExecuteScriptCmdByName(const char* cmdName);
 
 // ============================================================================

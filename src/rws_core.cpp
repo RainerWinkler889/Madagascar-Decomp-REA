@@ -19,6 +19,7 @@
  */
 
 #include "rws_core.h"
+#include "rw_sdk.h"
 #include "script_and_ui.h"
 #include "audio_and_frame.h"
 
@@ -329,10 +330,10 @@ void InitPostEngineStart(uint32_t width, uint32_t height, uint32_t depth) {
 
     // 6. Double-Buffer Clear (Clear front buffer and back buffer)
     RwRGBA blackColor = { 0, 0, 0, 255 };
-    ClearCamera(pCamera, &blackColor, 3); // 0x004D5810 (rwCAMERACLEARZ | rwCAMERACLEARIMAGE)
+    ClearCamera(pCamera, &blackColor, rwCAMERACLEARZ | rwCAMERACLEARIMAGE); // 0x004D5810 (rwCAMERACLEARZ | rwCAMERACLEARIMAGE)
     PresentCameraRaster();                // 0x00462720
 
-    ClearCamera(pCamera, &blackColor, 3); // 0x004D5810
+    ClearCamera(pCamera, &blackColor, rwCAMERACLEARZ | rwCAMERACLEARIMAGE); // 0x004D5810
     PresentCameraRaster();                // 0x00462720
 
     // 7. Standard RWS Chunk Handlers registrieren (0x00552F00)

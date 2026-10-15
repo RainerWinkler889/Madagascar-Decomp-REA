@@ -281,6 +281,110 @@ int32_t FindBTFBScriptInquiry(const char* name) {
     return -1;
 }
 
+// Canonical RWS Script Behaviors (0x005CE3AC..0x005CEEDC in Game.exe)
+static const char* const s_szRWSBehaviors[RWS_BEHAVIOR_COUNT] = {
+    "set behavior",     // 0: 0x005CE3AC
+    "spawn",            // 1: 0x005CE3F8
+    "spawn actor",      // 2: 0x005CE400
+    "new behavior",     // 3: 0x005CE568
+    "run as player"     // 4: 0x005CEEDC
+};
+
+const char* GetRWSBehaviorName(ERWSBehaviorType type) {
+    if (type >= 0 && type < RWS_BEHAVIOR_COUNT) {
+        return s_szRWSBehaviors[type];
+    }
+    return nullptr;
+}
+
+int32_t FindRWSBehavior(const char* name) {
+    if (!name) return -1;
+    for (int32_t i = 0; i < RWS_BEHAVIOR_COUNT; ++i) {
+        if (_stricmp(name, s_szRWSBehaviors[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Global active trigger volume list head in Game.exe (DAT_00617e78)
+CTriggerVolumeNode* g_pTriggerVolumeHead = nullptr; // 0x00617E78
+
+// 0x004133E0 (Inner Loop 0x00413500): Convex Trigger Volume Plane Test
+// Evaluates whether the 4 bounding box/quad vertices at [pEntity + 0x54]
+// strictly lie on the positive side of a convex polyhedral trigger volume
+// formed by a base plane and 4 boundary planes.
+// When all 4 points satisfy all 5 planes ((Nx*x + Ny*y + Nz*z) - D > 0.0f),
+// the volume is satisfied and returns true (0x00413572: MOV AL, 1).
+bool EvaluateTriggerVolumePlanes(const void* pEntity) {
+    if (!pEntity || !g_pTriggerVolumeHead) {
+        return false;
+    }
+
+    // Offset +0x54 in entity contains pointer to 4 bounding vertices (12 floats)
+    const float* const* ppVertices = (const float* const*)((const uint8_t*)pEntity + 0x54);
+    if (!ppVertices || !*ppVertices) {
+        return false;
+    }
+
+    const float* pVerts = *ppVertices;
+    CTriggerVolumeNode* pNode = g_pTriggerVolumeHead;
+
+    do {
+        // 1. Test Base Plane against all 4 bounding vertices (offsets 0, 3, 6, 9)
+        bool bBasePass = true;
+        for (int pt = 0; pt < 4; ++pt) {
+            const float* p = pVerts + (pt * 3);
+            float dist = (pNode->normal[0] * p[0] +
+                          pNode->normal[1] * p[1] +
+                          pNode->normal[2] * p[2]) - pNode->distance;
+
+            // In Game.exe: FCOMP float ptr [0x005ca5a8]; FNSTSW AX; TEST AH, 0x41; JNP fail
+            // Jumps if dist <= 0.0f
+            if (dist <= 0.0f) {
+                bBasePass = false;
+                break;
+            }
+        }
+
+        if (bBasePass) {
+            // 2. Test 4 Boundary Planes against all 4 bounding vertices
+            int boundaryIdx = 0;
+            for (; boundaryIdx < 4; ++boundaryIdx) {
+                const CTriggerBoundaryPlane* pPlane = &pNode->boundaryPlanes[boundaryIdx];
+                bool bPlanePass = true;
+
+                for (int pt = 0; pt < 4; ++pt) {
+                    const float* p = pVerts + (pt * 3);
+                    // 0x00413500: MOV EAX, dword ptr [ESI + 0x54] inside inner vertex loop
+                    float dist = (pPlane->normal[0] * p[0] +
+                                  pPlane->normal[1] * p[1] +
+                                  pPlane->normal[2] * p[2]) - pPlane->distance;
+
+                    if (dist <= 0.0f) {
+                        bPlanePass = false;
+                        break;
+                    }
+                }
+
+                if (!bPlanePass) {
+                    break;
+                }
+            }
+
+            // If all 4 boundary planes passed for all 4 vertices, trigger condition is met!
+            if (boundaryIdx == 4) {
+                return true; // 0x00413572: MOV AL, 0x1; RET
+            }
+        }
+
+        // Advance to next trigger volume node
+        pNode = pNode->pNext;
+    } while (pNode != nullptr);
+
+    return false; // 0x0041356e: XOR AL, AL; RET
+}
+
 // 0x00413500: ExecuteScriptCmd / BTFB Script Command Dispatcher
 bool ExecuteScriptCmdByName(const char* cmdString) {
     if (!cmdString || !*cmdString) return false;
@@ -292,59 +396,9 @@ bool ExecuteScriptCmdByName(const char* cmdString) {
         return true;
     }
 
-    // 2. Built-in Cinematic & Sequence Triggers
-    if (_strnicmp(cmdString, "START_CINEMATIC", 15) == 0) {
-        // Starts in-game cutscene or sequence
-        return true;
-    }
-    if (_strnicmp(cmdString, "STOP_CINEMATIC", 14) == 0) {
-        return true;
-    }
-
-    // 3. Screen Fade & Visual Presentation
-    if (_strnicmp(cmdString, "FADE_OUT", 8) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "FADE_IN", 7) == 0) {
-        return true;
-    }
-
-    // 4. Audio & Background Music Commands
-    if (_strnicmp(cmdString, "PLAY_MUSIC", 10) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "STOP_MUSIC", 10) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "PLAY_SOUND", 10) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "STOP_SOUND", 10) == 0) {
-        return true;
-    }
-
-    // 5. World, Door & Actor Triggers
-    if (_strnicmp(cmdString, "UNLOCK_DOOR", 11) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "LOCK_DOOR", 9) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "LOAD_MAP", 8) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "SPAWN_ACTOR", 11) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "SET_CHECKPOINT", 14) == 0) {
-        return true;
-    }
-
-    // 6. Camera Commands
-    if (_strnicmp(cmdString, "SET_CAMERA_TARGET", 17) == 0) {
-        return true;
-    }
-    if (_strnicmp(cmdString, "RESET_CAMERA", 12) == 0) {
+    // 2. Check for RWS Script Behaviors (0x005CE3AC..0x005CEEDC)
+    int32_t bhvIdx = FindRWSBehavior(cmdString);
+    if (bhvIdx >= 0) {
         return true;
     }
 
@@ -354,10 +408,14 @@ bool ExecuteScriptCmdByName(const char* cmdString) {
 void ExecuteScriptCmd(uint32_t dwCommandHash) {
     if (dwCommandHash == 0) return;
 
-    // The command hash is either the direct pooled string pointer from HashString()
-    // or a 32-bit hash value:
+    // Command hash is either a pooled string pointer from HashString() or an entity context
     const char* cmdString = (const char*)(uintptr_t)dwCommandHash;
-    ExecuteScriptCmdByName(cmdString);
+    if (ExecuteScriptCmdByName(cmdString)) {
+        return;
+    }
+
+    // If treated as an entity reference, evaluate convex trigger planes
+    EvaluateTriggerVolumePlanes((const void*)(uintptr_t)dwCommandHash);
 }
 
 // ============================================================================

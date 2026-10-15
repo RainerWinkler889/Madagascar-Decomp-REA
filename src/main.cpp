@@ -185,6 +185,10 @@ void CreateGameWindow(
 // The true Win32 entry point for Madagascar
 // ============================================================================
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    (void)hPrevInstance;
+    (void)lpCmdLine;
+    (void)nCmdShow;
+
     // 1. Single Instance Check via named mutex
     HANDLE hMutex = CreateMutexA(nullptr, FALSE, "Madagascar Running");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -204,8 +208,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     char resBuffer[16] = { 0 };
     GetSettingString("Settings\\Display\\Resolution", "800x600", resBuffer, sizeof(resBuffer));
     
-    char widthStr[16]  = { 0 };
-    char heightStr[16] = { 0 };
     char* xPtr = strchr(resBuffer, 'x');
     if (xPtr != nullptr) {
         *xPtr = '\0';

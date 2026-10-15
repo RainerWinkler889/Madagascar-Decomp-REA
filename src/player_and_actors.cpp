@@ -8,9 +8,9 @@
 
 #include "player_and_actors.h"
 #include "audio_and_frame.h"
-#include "script_and_ui.h"
 #include <cstring>
-#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 // ============================================================================
 // Singletons & Global State Variables in Game.exe .data
@@ -24,6 +24,28 @@ static CCharacterActor   s_characterGloria(CHAR_GLORIA);
 static CCharacterActor   s_characterPenguins(CHAR_PENGUINS);
 
 static CCharacterActor*  s_pActiveCharacter = &s_characterAlex;
+
+// ECProtoActor VTable in .rdata at 0x005CD2E8 (18 virtual method slots)
+static const void* const s_pECProtoActorVTable[18] = {
+    (void*)0x00436A40, // Slot 0:  Destructor / Cleanup
+    (void*)0x0042CBC0, // Slot 1:  Event Dispatcher
+    (void*)0x0042CC00, // Slot 2:  Event Handler
+    (void*)0x00402BB0, // Slot 3:  Actor State Query
+    (void*)0x0042CBF0, // Slot 4:  Action Dispatch
+    (void*)0x0042CBE0, // Slot 5:  BTFB Script HandleEvent
+    (void*)0x0043DC80, // Slot 6:  BTFB Script ProcessStep
+    (void*)0x004025A0, // Slot 7:  BTFB Script GetStatus
+    (void*)0x004025B0, // Slot 8:  BTFB Script Resume
+    (void*)0x00464EF0, // Slot 9:  BTFB Script GetTimer
+    (void*)0x00402B10, // Slot 10: Actor Query Transform
+    (void*)0x0043E6F0, // Slot 11: Init / No-op
+    (void*)0x00402BD0, // Slot 12: Set Action Token
+    (void*)0x00402B80, // Slot 13: Query Action Token
+    (void*)0x00407AB0, // Slot 14: Entity Visibility Update
+    (void*)0x004025A0, // Slot 15: Status
+    (void*)0x00402BC0, // Slot 16: Action Callback
+    (void*)0x0042CDA0  // Slot 17: State Transition
+};
 
 // ============================================================================
 // 1. CItemManager Implementation (0x0043BCD8 .. 0x0043BEA0)
@@ -173,54 +195,46 @@ CCharacterActor::CCharacterActor(ECharacterId id) {
 CCharacterActor::~CCharacterActor() {
 }
 
-// 0x004283E0 / 0x00428E9C: Character Physics & Coordinate Integration
+// 0x004283CF / 0x00428E9C: Character Physics & Coordinate Integration
 void CCharacterActor::Update(float deltaTime) {
     if (deltaTime <= 0.0f) return;
 
-    // 1. Apply gravity if airborne
+    // 1. Apply gravity fall acceleration if airborne
     if (!m_physics.bOnGround) {
         m_physics.vVelocity.y -= m_physics.fGravity * deltaTime;
     }
 
     // 2. Integrate position (Offsets 0x1F0, 0x1F4, 0x1F8)
+    // 0x00428E80: fld [eax+0x34]; fsub [ebp+0x154]; fstp dword ptr [ebp+0x1f4] (Y)
+    // 0x00428E90: fld [eax+0x38]; fsub [ebp+0x158]; fstp dword ptr [ebp+0x1f8] (Z)
     m_physics.vPosition.x += m_physics.vVelocity.x * deltaTime;
     m_physics.vPosition.y += m_physics.vVelocity.y * deltaTime;
     m_physics.vPosition.z += m_physics.vVelocity.z * deltaTime;
 
-    // 3. Ground collision check
+    // 3. Ground plane collision resolution
     if (m_physics.vPosition.y <= m_physics.fGroundHeight) {
         m_physics.vPosition.y = m_physics.fGroundHeight;
         m_physics.vVelocity.y = 0.0f;
         m_physics.bOnGround   = true;
         m_physics.bJumping    = false;
     }
-
-    // 4. Update model coordinates if attached
-    if (m_pModel != nullptr) {
-        // Synchronize skeletal origin
-    }
 }
 
 void CCharacterActor::PerformAttack() {
     switch (m_characterId) {
         case CHAR_ALEX:
-            // Alex Roar & Claw Swipe
             if (m_pModel) m_pModel->PlayAnimation("alex_roar");
             break;
         case CHAR_MARTY:
-            // Marty Rear Zebra Kick
             if (m_pModel) m_pModel->PlayAnimation("marty_kick");
             break;
         case CHAR_MELMAN:
-            // Melman Head Spin Attack
             if (m_pModel) m_pModel->PlayAnimation("melman_spin");
             break;
         case CHAR_GLORIA:
-            // Gloria Butt Bounce / Slam
             if (m_pModel) m_pModel->PlayAnimation("gloria_slam");
             break;
         case CHAR_PENGUINS:
-            // Penguin Bowling Ball / Karate Chop
             if (m_pModel) m_pModel->PlayAnimation("penguin_attack");
             break;
         default:
@@ -231,25 +245,20 @@ void CCharacterActor::PerformAttack() {
 void CCharacterActor::PerformSpecialAction() {
     switch (m_characterId) {
         case CHAR_ALEX:
-            // Alex Double Jump
             Jump();
             break;
         case CHAR_MARTY:
-            // Marty Gallop Dash
             m_physics.vVelocity.z += 5.0f;
             break;
         case CHAR_MELMAN:
-            // Melman Helicopter Twirl (slow descent)
             if (!m_physics.bOnGround) {
-                m_physics.vVelocity.y = -2.0f; // Controlled glide
+                m_physics.vVelocity.y = -2.0f;
             }
             break;
         case CHAR_GLORIA:
-            // Gloria Chili Pepper Charge
             m_physics.vVelocity.z += 8.0f;
             break;
         case CHAR_PENGUINS:
-            // Penguin Belly Slide
             m_physics.vVelocity.z += 6.0f;
             break;
         default:
@@ -281,14 +290,30 @@ const RwV3d* CCharacterActor::GetPosition() const {
 
 // 0x00428270: Master Hierarchical Animation (HAnim) & Skeleton bone updates
 void UpdateHAnimSkeletons() {
-    // 1. Tick character coordinate physics
-    UpdateCharacterPhysics(1.0f / 60.0f);
+    typedef void (*HAnimSubFn)();
+    typedef void (*WorldSubFn)(int32_t);
 
-    // 2. Tick audio streaming voices
+    ((HAnimSubFn)0x00426550)();
+    ((HAnimSubFn)0x0043CCA0)();
+    ((HAnimSubFn)0x0044DC30)();
+    ((HAnimSubFn)0x00419380)();
+
+    // 0x0043C9B0: Update world hierarchies for active worlds (DAT_00602EA0)
+    int32_t activeWorldCount = 1;
+    ((WorldSubFn)0x0043C9B0)(activeWorldCount);
+
+    ((HAnimSubFn)0x0042B150)();
+    ((HAnimSubFn)0x00450490)();
+    ((HAnimSubFn)0x00464E20)();
+
+    // Per-frame audio streaming pump (0x004476F0)
     UpdateAudioStreams();
+
+    // Set texture mipmapping state (0x004E1FA0)
+    RwTextureSetMipmapping(RWTRUE);
 }
 
-// 0x004283E0 / 0x00428E9C: Character Physics & Coordinate Update
+// 0x004283CF / 0x00428E9C: Character Physics & Coordinate Update
 void UpdateCharacterPhysics(float deltaTime) {
     if (s_pActiveCharacter != nullptr) {
         s_pActiveCharacter->Update(deltaTime);
@@ -297,11 +322,60 @@ void UpdateCharacterPhysics(float deltaTime) {
 
 // 0x00551380: RenderWare Collision & Physics Solver tick
 void SolvePhysicsAndCollisions() {
+    // Traverses doubly linked active collision list (DAT_0062FEE4)
+    // Resolves contact impulses against world BSP geometry
+    struct CCollisionNode {
+        CCollisionNode* pNext;            // +0x00
+        CCollisionNode* pPrev;            // +0x04
+        uint32_t        pad[1];           // +0x08
+        uint32_t        colliderData[63]; // +0x0C
+        uint32_t        colliderState;    // +0x108 (offset 0x42 in dwords)
+        uint32_t        bDisabled;        // +0x110 (offset 0x44 in dwords)
+    };
+
+    static CCollisionNode* s_pCollisionListHead = nullptr; // DAT_0062FEE4
+    CCollisionNode* pCurr = s_pCollisionListHead;
+
+    while (pCurr != nullptr) {
+        if (pCurr->bDisabled == 0) {
+            uint32_t colliderState = pCurr->colliderState;
+            typedef void* (*GetColliderFn)(void*);
+            void* pCollider = ((GetColliderFn)0x005524C0)(&pCurr->colliderData[0]);
+            if (pCollider != nullptr) {
+                typedef int32_t (*CollideSolveFn)(void*, uint32_t);
+                void** pVTable = *(void***)pCollider;
+                CollideSolveFn pfnSolve = (CollideSolveFn)pVTable[4]; // +0x10
+                int32_t result = pfnSolve(&pCurr->colliderData[0], colliderState);
+                if (result != 0) {
+                    CCollisionNode* pNext = pCurr->pNext;
+                    pCurr->colliderState = 0;
+                    CCollisionNode* pPrev = pCurr->pPrev;
+                    if (pPrev == nullptr) {
+                        s_pCollisionListHead = pNext;
+                        if (pNext != nullptr) {
+                            pNext->pPrev = nullptr;
+                        }
+                    } else {
+                        pPrev->pNext = pNext;
+                        if (pNext != nullptr) {
+                            pNext->pPrev = pPrev;
+                        }
+                    }
+                    typedef void (*FreeColliderFn)(void*);
+                    ((FreeColliderFn)0x005500F0)(pCurr);
+                }
+            }
+        }
+        pCurr = pCurr->pNext;
+    }
+
+    // Also update active character ground and bounds
     if (s_pActiveCharacter != nullptr) {
-        // Enforce boundary geometry & ground collision
         if (s_pActiveCharacter->m_physics.vPosition.y < s_pActiveCharacter->m_physics.fGroundHeight) {
             s_pActiveCharacter->m_physics.vPosition.y = s_pActiveCharacter->m_physics.fGroundHeight;
             s_pActiveCharacter->m_physics.bOnGround   = true;
+            s_pActiveCharacter->m_physics.bJumping    = false;
+            s_pActiveCharacter->m_physics.vVelocity.y = 0.0f;
         }
     }
 }

@@ -436,6 +436,7 @@ int32_t RwEngine_Initialize(
 ) {
     RwEngineOpenParams openParams;
     int32_t bModeSelected = 0;
+    (void)param1;
 
     // Memory Function Table Fallback
     void* memTable = pFuncTable;

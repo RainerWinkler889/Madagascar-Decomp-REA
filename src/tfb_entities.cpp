@@ -72,6 +72,7 @@ CTFBWorld::~CTFBWorld() {
 
 // 0x0041B640: CTFBWorld Stream Deserializer
 void CTFBWorld::StreamRead(void* pStream) {
+    (void)pStream;
     // 1. Base Entity Constructor (0x00410380)
     ((RWSInitEntityFn)0x00410380)(this);
 
@@ -293,6 +294,7 @@ void CTFBModel::BindMouthBone(void* pClump) {
 
 // 0x00444FB0: CTFBModel Stream Deserializer
 void CTFBModel::StreamRead(void* pStream) {
+    (void)pStream;
     // 1. Register Class ("CTFBModel", 0x00603548)
     ((RWSRegisterEntityFn)0x00550020)(this, (void*)TFB_DESCRIPTOR_MODEL);
 
@@ -427,6 +429,7 @@ CTFBSound::~CTFBSound() {
 
 // 0x00419450: CTFBSound Stream Deserializer
 void CTFBSound::StreamRead(void* pStream) {
+    (void)pStream;
     // 1. Base Entity Constructor (0x00410380)
     ((RWSInitEntityFn)0x00410380)(this);
 
@@ -572,6 +575,7 @@ CTFBCommand::~CTFBCommand() {
 
 // 0x00413370: CTFBCommand Stream Deserializer
 void CTFBCommand::StreamRead(void* pStream) {
+    (void)pStream;
     // 1. Register Entity Class ("CTFBCommand", 0x006029BC)
     ((RWSRegisterEntityFn)0x00550020)(this, (void*)TFB_DESCRIPTOR_COMMAND);
 

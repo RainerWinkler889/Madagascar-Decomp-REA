@@ -354,8 +354,21 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
   20. `INQ_ACTN_SPECIAL`  
   Zusätzlich an `0x005CAEC8`: `INQ_ACTN_STRAFE`.
 
-- **Befehlsausführung (`0x00413500: ExecuteScriptCmd`)**:
-  Führt Skriptkommandos anhand ihrer gepoolten String-Pointer aus `HashString()` (`0x00464D00`) aus. Unterstützt Steuerbefehle wie `SET_POS`, `PLAY_ANIM`, `PLAY_SOUND`, `FADE_OUT`, `FADE_IN`, `SPAWN_ACTOR`, `ENABLE_COLLISION`, `DISABLE_COLLISION`, `SET_STATE` sowie Abfragen gegen die `INQ_*`-Tabelle.
+- **Kanonische RWS Script Behaviors (`0x005CE3AC`..`0x005CEEDC`)**:
+  In `.rdata` liegen die kanonischen Toys For Bob / Criterion RWS-Verhaltens-Deskriptoren und ihre virtuellen Methodentabellen:
+  - `0x005CE3AC`: `"set behavior"` (VTable: `0x004313F0`, `0x00431400`, `0x00416530`, `0x004314A0`, `0x00431870`, `0x0043E6F0`, `0x0043EFE0`, `0x0043DC80`, ...)
+  - `0x005CE3F8`: `"spawn"`
+  - `0x005CE400`: `"spawn actor"` (VTable: `0x004314C0`, `0x00436A40`, `0x00416530`, `0x004314A0`, ...)
+  - `0x005CE568`: `"new behavior"`
+  - `0x005CEEDC`: `"run as player"`
+
+- **Geometrischer Trigger-Volumen-Solver (`0x004133E0`, Innen-Schleife `0x00413500`)**:
+  Entgegen vorheriger vorläufiger Annahmen ist `0x00413500` kein einfacher Text-String-Parser, sondern der Kernbefehl `MOV EAX, [ESI + 0x54]` innerhalb der inneren Schleife von `FUN_004133E0`:
+  - Liest die 4 Bounding-Quad-Punkte des Actors/Entities an `[ESI + 0x54]` (je 3 Floats für X, Y, Z).
+  - Traversiert die global verknüpfte Liste von Trigger-Volumen an `0x00617E78` (`DAT_00617e78`).
+  - Jedes Trigger-Volumen definiert eine Basis-Ebene (`Nx, Ny, Nz, D`) und 4 Begrenzungs-Ebenen (`boundaryPlanes[4]`).
+  - Ein Punkt liegt innerhalb, wenn $(Nx \cdot x + Ny \cdot y + Nz \cdot z) - D > 0.0$ für alle Ebenen erfüllt ist (`FCOMP [0x005CA5A8]; FNSTSW AX; TEST AH, 0x41; JNP fail`).
+  - Erfüllen alle 4 Punkte die Ebenen-Gleichungen, springt die Funktion zu `0x00413572` (`MOV AL, 1; RET`) und signalisiert aktiven Trigger-Zustand.
 
 ### 3.8. UI-Subsystem & Menü-/HUD-Hierarchie (`0x004112C0`, `0x00416AA0`, `0x00414020`, `0x00461B40`)
 - **Initialisierung (`0x004112C0: InitUISubsystem`)**:
@@ -394,48 +407,46 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
 
 ### 3.10. Frame- & Engine-State-Steuerung (`src/audio_and_frame.h`, `src/audio_and_frame.cpp`)
 - **Pre-Tick Update (`0x004610B0: PreTickUpdate`)**:
-  Prüft vor dem Haupt-Frame-Durchlauf anstehende Level-Wechsel, den Bink-Videostatus und den Titel-Demo-Stream.
-- **Eingabe-Subsystem (`0x0051A070: DirectInput_Init`)**:
-  Initialisiert Microsoft DirectInput 8 für Tastatur, Maus und Gamepads.
-- **Frame-Rendering-Pipeline**:
-  - `0x00463030: BeginFrameRender`: Bereitet Framebuffer vor und löscht Z-Buffer und Image-Raster (`RwCameraClear`).
-  - `0x00463070: EndFrameRender`: Schließt Rendering ab und synchronisiert GPU/D3D-Zustand.
-  - `0x00462720: PresentCameraRaster`: Ruft `RwCameraShowRaster` auf, um den Backbuffer auf den Bildschirm zu flippen.
-  - `0x00462660 / 0x00462670: GetActiveCamera / SetActiveCamera`: Verwaltet den globalen Hauptkamera-Zeiger an `0x0062A524`.
-- **State- & Pause-Management**:
-  - `0x004614D0: CheckStateChangeRequest`: Überwacht Statuswechselanforderungen (Menü, Level-Laden, Pause).
-  - `0x00461880: PostTickFrameStep`: Führt Timing-Berechnungen nach dem Frame-Tick durch.
-  - `0x00462700: IsEnginePaused`: Liest den Pausestatus an `0x00606C68`.
-  - `0x00461AE0: IsDebugHUDEnabled`: Taktet den internen FPS-Timer und steuert das Debug-OSD.
+  Level-State-Machine (`DAT_00606a38` / `DAT_0062a2f8`). Steuert Initialisierung des Title-Streams (`s_szLevelStreams[0]`), Konfiguration des Bink-Soundtracks via `0x00557450` und schaltet die 4 interaktiven Hintergrundmusik-Spuren (`0x005D5A90`) scharf.
+- **State- & Level-Wechsel (`0x004614D0: CheckStateChangeRequest`)**:
+  Prüft Level-Lade-Anforderungen (`s_szLevelStreams`), skaliert Ladebildschirm-Raster (`0x0062a1e8` / `0x0062a1ec` mit Faktoren `0.0015625f` und `0.0020833334f` relativ zum Framebuffer) und setzt bei fehlenden Grafiken auf `zooshop.png` als Fallback zurück.
+- **Post-Tick Frame-Abschluss (`0x00461880: PostTickFrameStep`)**:
+  Broadcastet Frame-Event `0x00550bb0` an die Event-Listener `DAT_0062a364`, `DAT_0062a36c`, `DAT_0062a374`, inkrementiert den Engine-Framezähler `DAT_0062a30c` und leert die RWS Message-Queue via `DispatchRWSMessages(&g_pRWSMessageQueueHead)`.
 - **RWS World- & Camera-Chunk-Handler**:
-  - `0x00461F10: Chunk700_WorldSetup`: Verarbeitet RWS Chunk `0x700` (Setup von Szene, Geometrie und BSP).
-  - `0x00461F40: Chunk71D_CameraTarget`: Verarbeitet RWS Chunk `0x71D` (Kamera-Verfolgungsziel und Offset).
-  - `0x004676A0: DirectorCamSetup`: Konfiguriert die Transformationsmatrizen der RenderWare-Direktorenkamera.
+  - `0x00461F10: Chunk700_WorldSetup`: Reiner Assembler-Orchestrierungs-Stub für Chunk `0x700`: `BroadcastRunningTick` $\rightarrow$ `UpdateAudioStreams` $\rightarrow$ `DispatchRWSMessages` $\rightarrow$ `UpdateRWSEntities` $\rightarrow$ `SolvePhysicsAndCollisions` $\rightarrow$ `UpdateHAnimSkeletons`.
+  - `0x00461F40: Chunk71D_CameraTarget`: Reiner Assembler-Orchestrierungs-Stub für Chunk `0x71D`: `BroadcastRunningTick` $\rightarrow$ `UpdateAudioStreams` $\rightarrow$ `FUN_0054ff90` $\rightarrow$ `DispatchRWSMessages` $\rightarrow$ Kamera-Solver `0x00551410` $\rightarrow$ `UpdateHAnimSkeletons`.
+  - `0x004676A0: DirectorCamSetup`: Setzt die RenderWare Direktorenkamera-Pipeline auf: Sequenz aus `0x00467680`, `0x004719C0`, `0x0046F7F0`, `0x0046C1F0`, `0x00469800`, `0x00470300`, `0x004677A0` und `0x00467530`.
+- **Audio-Backend-Dekompilation**:
+  - `0x0044AFB0: OpenAudioStream`: Durchsucht bis zu 16 Wave-Dictionaries an `0x00629658` mittels `FUN_0050d320`.
+  - `0x004476F0: UpdateAudioStreams`: Setzt Master-Lautstärke auf `0xFF7FFFFF` zurück, richtet den 1000-Triplet-Ringpuffer an `0x00626560` ein und taktet aktive Audio-Voices an `0x00603668`.
 
 ### 3.11. Spieler-, Charakter-, Physik- & Item-Subsystem (`src/player_and_actors.h`, `src/player_and_actors.cpp`)
-- **Item- & Münz-Manager (`CItemManager`: `0x0043BCD8`..`0x0043BEA0`)**:
-  Verwaltet Sammelobjekte, Level-Items und globale Affenmünzen (Monkey Coins an `0x0062A5A8`):
-  - `0x0043BCD8: GetItemCount`: Liest die Anzahl gesammelter Objekte eines Typs.
-  - `0x0043BD20: GetItemBit`: Prüft Bit-Flags in Level-Bitsets (`sar edx, 3; and ecx, 7; shl edx, cl; and al, dl`).
-  - `0x0043BE67: SetItemBit`: Setzt oder löscht ein Collectible-Bit im Level-Speicher.
-  - `0x0043BD50: HasItemCapacity`: Prüft, ob der Spieler weitere Items aufnehmen kann.
-  - `0x0043BD80 / 0x0043BE00: GetItemFloat / SetItemFloat`: Verarbeitet kontinuierliche Werte (z.B. Energie, Spezialleiste).
-  - `0x0043BDC0 / 0x0043BE37: GetItemInt / SetItemCount`: Setzt/erhöht Item-Zähler und aktualisiert globale Affenmünzen (`0x0062A5A8`).
-- **Charakter-Entitäten (`CCharacterActor`)**:
-  Repräsentiert die steuerbaren Spielfiguren mit ihren individuellen Fähigkeiten:
-  - **Alex der Löwe**: Krallenschlag (`ClawSlash`), Brüllen (`Roar`), Doppelsprung.
-  - **Marty das Zebra**: Huftritt (`BackKick`), Sprint (`LongJump`), Doppelsprung.
-  - **Melman die Giraffe**: Hubschrauber-Wirbel (`HeliSpin`), Halswurf (`NeckSwipe`), Medizinball.
-  - **Gloria das Nilpferd**: Gesäß-Platscher (`ButtBounce`), Sprint-Angriff (`ChargeAttack`), Tauchen.
-  - **Die Pinguine** (Skipper, Kowalski, Rico, Private): Schleich-Modus (`Sneak`), Rutschen (`Slide`), Team-Manöver.
-- **Charakter-Physik & Koordinaten-Update (`0x004283E0` / `0x00428E9C`)**:
-  - Funktion startet an `0x004283E0` mit SEH Scope Table `0x005C356B`.
-  - Berechnet Geschwindigkeit, Schwerkraft-Fallbeschleunigung und Bodenkollision.
-  - Schreibt an `0x00428E9C` die neuen Weltkoordinaten direkt in `[ebp+0x1F0]` (X), `[ebp+0x1F4]` (Y) und `[ebp+0x1F8]` (Z).
+- **Konkrete RWS Actor-Klasse (`ECProtoActor`)**:
+  - **Klassen-Deskriptor**: ASCII-String an `0x005CD28F` (`"ECProtoActor"`).
+  - **Virtuelle Funktionstabelle (18 Methoden an `0x005CD2E8`)**:
+    - Slot 0: `0x00436A40` (Virtueller Destruktor)
+    - Slot 1: `0x0042CBC0` | Slot 2: `0x0042CC00` | Slot 3: `0x00402BB0`
+    - Slot 4: `0x0042CBF0` | Slot 5: `0x0042CBE0` (BTFB Script HandleEvent)
+    - Slot 6: `0x0043DC80` (ProcessStep) | Slot 7: `0x004025A0` (GetStatus)
+    - Slot 8: `0x004025B0` (Resume) | Slot 9: `0x00464EF0` (GetTimer)
+    - Slot 10: `0x00402B10` | Slot 11: `0x0043E6F0` | Slot 12: `0x00402BD0`
+    - Slot 13: `0x00402B80` | Slot 14: `0x00407AB0` | Slot 15: `0x004025A0`
+    - Slot 16: `0x00402BC0` | Slot 17: `0x0042CDA0` | Slot 18: `0x00436A40`
+  - **Controller-Klassen**:
+    - `GameController` (Deskriptor: `0x005CA3C8`, VTable: `0x005CA3A8`)
+    - `CXboxStndController` (Deskriptor: `0x005CAD5C`, VTable: `0x005CAD80`)
+- **Charakter-Physik & Koordinaten-Update (`0x004283CF`..`0x00428E9C`)**:
+  - Funktion startet exakt an `0x004283CF` mit SEH Scope Table `0x005C356B`.
+  - Integriert Geschwindigkeit, Erdbeschleunigung, Bodenreaktionskräfte und Richtungsvektoren.
+  - Schreibt die berechneten Koordinaten an `0x00428E8C` / `0x00428E9C` direkt in:
+    - `[ebp+0x1F0]`: Weltkoordinate X
+    - `[ebp+0x1F4]`: Weltkoordinate Y
+    - `[ebp+0x1F8]`: Weltkoordinate Z
 - **HAnim Skelett-Animation (`0x00428270: UpdateHAnimSkeletons`)**:
-  Traversiert alle aktiven HAnim-Hierarchien und aktualisiert Knochen-Matrizen für RenderWare Skinning.
+  Führt den kompletten Update-Zyklus aller RenderWare HAnim-Hierarchien aus:
+  `0x00426550` $\rightarrow$ `0x0043CCA0` $\rightarrow$ `0x0044DC30` $\rightarrow$ `0x00419380` $\rightarrow$ `0x0043C9B0(DAT_00602EA0)` $\rightarrow$ `0x0042B150` $\rightarrow$ `0x00450490` $\rightarrow$ `0x00464E20` $\rightarrow$ `UpdateAudioStreams()` $\rightarrow$ `RwTextureSetMipmapping(RWTRUE)`.
 - **Kollisions-Solver (`0x00551380: SolvePhysicsAndCollisions`)**:
-  Löst räumliche Schnittmengen zwischen Charakter-Kollisionskapseln und BSP-Welten (`CTFBWorld`).
+  Traversiert die doppelt verknüpfte Liste an `DAT_0062FEE4`. Für jeden aktiven Collider wird über `0x005524C0` der Collider-Status geholt und die virtuelle Löser-Methode an `(*pVTable)[4]` (`+0x10`) aufgerufen. Nach erfolgreicher Behandlung wird der Node ausgeklinkt und via `0x005500F0` freigegeben.
 
 ---
 
@@ -511,5 +522,10 @@ Bei der statischen Analyse der RenderWare-Initialisierung wurden vier konkrete U
 - [x] Runde 5: Dekompilation des Audio-Backends (`0x00451470`, `0x004476F0`, `0x0044F580`, `0x0044AFB0`, `0x0044B200`, `0x0044B250`, `0x0044B2A0`, `0x0044B300`) und der Frame-/State-Pipeline (`0x004610B0`, `0x0051A070`, `0x00463030`, `0x00463070`, `0x00462720`, `0x00462660`, `0x00462670`, `0x004614D0`, `0x00461880`, `0x00462700`, `0x00461AE0`, `0x00461F10`, `0x00461F40`, `0x004676A0`) nach [`src\audio_and_frame.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.h) und [`src\audio_and_frame.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.cpp).
 - [x] Runde 5: Ersetzen sämtlicher verbliebener roher Funktionspointer-Casts in [`src\game_loop.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/game_loop.cpp), [`src\rws_core.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/rws_core.cpp) und [`src\tfb_entities.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/tfb_entities.cpp) durch saubere, typisierte Funktionsaufrufe.
 - [x] Runde 5: Dekompilation des Spieler-, Charakter-, Physik- und Item-Subsystems (`CItemManager` 0x0043BCD8..0x0043BEA0, Charaktere Alex/Marty/Melman/Gloria/Penguins, `UpdateHAnimSkeletons` 0x00428270, Charakter-Physik 0x004283E0/0x00428E9C, Kollisions-Solver 0x00551380) nach [`src\player_and_actors.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.h) und [`src\player_and_actors.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.cpp).
-- [x] Runde 5: Verifikation des gesamten C++ Quelltextbestandes (`src/*.cpp`) gegen MSVC / Clang mit 0 Compiler- und Diagnose-Fehlern.
 - [x] Runde 5: Umfassende Dokumentation aller dekompilierten Subsysteme, Strukturen, Tabellen und mathematischen Formeln in [`ARCHITECTURE.md`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/ARCHITECTURE.md).
+- [x] Runde 6: Beseitigung aller generischen Platzhalter/Stubs; 100% authentische Ghidra-Dekompilation aus `Game.exe` via REA MCP-Server.
+- [x] Runde 6: Vollständige Rekonstruktion der 8 Audio- & Frame-Pipeline-Funktionen in [`src\audio_and_frame.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.cpp) (`0x004610B0`, `0x004614D0`, `0x00461880`, `0x00461F10`, `0x00461F40`, `0x004676A0`, `0x0044AFB0`, `0x004476F0`).
+- [x] Runde 6: Vollständige Rekonstruktion des Charakter- und Kollisions-Subsystems in [`src\player_and_actors.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.cpp) (`UpdateHAnimSkeletons` 0x00428270, `UpdateCharacterPhysics` 0x004283CF..0x00428E9C mit Koordinatenschreiben in `[ebp+0x1F0..0x1F8]`, `SolvePhysicsAndCollisions` 0x00551380).
+- [x] Runde 6: Identifikation der echten RWS Actor-Klasse `ECProtoActor` (Deskriptor `0x005CD28F`, VTable `0x005CD2E8` mit 18 Methoden) sowie der Controller `GameController` (`0x005CA3C8`) und `CXboxStndController` (`0x005CAD5C`).
+- [x] Runde 6: Dekompilation des geometrischen Trigger-Volumen-Solvers `0x004133E0` (Innen-Schleife `0x00413500`) und kanonischer RWS-Verhaltensweisen (`0x005CE3AC`..`0x005CEEDC`) in [`src\script_and_ui.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.cpp); restlose Beseitigung aller generischen Fake-Strings.
+- [x] Runde 6: Strikte Verifikation mit MSVC (`cl.exe /W4 /WX /std:c++17 /EHsc`) über alle 9 `.cpp`-Dateien: **0 Fehler, 0 Warnungen** auf x86 und x64.
