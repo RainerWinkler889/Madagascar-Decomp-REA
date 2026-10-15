@@ -359,6 +359,9 @@ RwCamera* RwCameraClear(RwCamera* camera, RwRGBA* colour, RwInt32 clearFlags);
 // 0x004D6000: Present/Display camera raster
 RwCamera* RwCameraShowRaster(RwCamera* camera, void* pDev, RwUInt32 flags);
 
+// 0x004E28B0: Destroy camera instance
+RwBool RwCameraDestroy(RwCamera* camera);
+
 // 0x004D8D40: Create a new transformation Frame
 RwFrame* RwFrameCreate(void);
 
@@ -367,6 +370,9 @@ RwFrame* RwFrameSetIdentity(RwFrame* frame);
 
 // 0x004E2BB0: Allocate a FrameBuffer or ZBuffer Raster
 RwRaster* RwRasterCreate(RwInt32 width, RwInt32 height, RwInt32 depth, RwInt32 flags);
+
+// 0x004D5470: Destroy raster instance
+RwBool RwRasterDestroy(RwRaster* raster);
 
 // 0x004EFD00: Open RenderWare Stream (rwSTREAMFILENAME, rwSTREAMREAD, path)
 RwStream* RwStreamOpen(RwStreamType type, RwStreamAccessType accessType, const void* pData);

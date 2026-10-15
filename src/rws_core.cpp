@@ -310,9 +310,8 @@ void InitPostEngineStart(uint32_t width, uint32_t height, uint32_t depth) {
 
     // 3. Direktorenkamera & erweiterte Setups
     DirectorCamSetup(pCamera);
-
-    typedef void (*CameraSubsystemFn)(RwCamera*);
-    ((CameraSubsystemFn)0x00462A50)(pCamera);
+    // 0x00462A50: Clean camera & raster cleanup call
+    RwDestroyCameraAndRasters(pCamera);
 
     // 4. RWS Framework Initialisierungen
     typedef void (*RWSInitFn)();

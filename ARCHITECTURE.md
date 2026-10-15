@@ -420,33 +420,141 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
   - `0x0044AFB0: OpenAudioStream`: Durchsucht bis zu 16 Wave-Dictionaries an `0x00629658` mittels `FUN_0050d320`.
   - `0x004476F0: UpdateAudioStreams`: Setzt Master-Lautstärke auf `0xFF7FFFFF` zurück, richtet den 1000-Triplet-Ringpuffer an `0x00626560` ein und taktet aktive Audio-Voices an `0x00603668`.
 
-### 3.11. Spieler-, Charakter-, Physik- & Item-Subsystem (`src/player_and_actors.h`, `src/player_and_actors.cpp`)
+### 3.11. Spieler-, ECProtoActor- & Charakter-Physik-Subsystem (`src/player_and_actors.h`, `src/player_and_actors.cpp`)
+
 - **Konkrete RWS Actor-Klasse (`ECProtoActor`)**:
   - **Klassen-Deskriptor**: ASCII-String an `0x005CD28F` (`"ECProtoActor"`).
-  - **Virtuelle Funktionstabelle (18 Methoden an `0x005CD2E8`)**:
-    - Slot 0: `0x00436A40` (Virtueller Destruktor)
-    - Slot 1: `0x0042CBC0` | Slot 2: `0x0042CC00` | Slot 3: `0x00402BB0`
-    - Slot 4: `0x0042CBF0` | Slot 5: `0x0042CBE0` (BTFB Script HandleEvent)
-    - Slot 6: `0x0043DC80` (ProcessStep) | Slot 7: `0x004025A0` (GetStatus)
-    - Slot 8: `0x004025B0` (Resume) | Slot 9: `0x00464EF0` (GetTimer)
-    - Slot 10: `0x00402B10` | Slot 11: `0x0043E6F0` | Slot 12: `0x00402BD0`
-    - Slot 13: `0x00402B80` | Slot 14: `0x00407AB0` | Slot 15: `0x004025A0`
-    - Slot 16: `0x00402BC0` | Slot 17: `0x0042CDA0` | Slot 18: `0x00436A40`
-  - **Controller-Klassen**:
-    - `GameController` (Deskriptor: `0x005CA3C8`, VTable: `0x005CA3A8`)
-    - `CXboxStndController` (Deskriptor: `0x005CAD5C`, VTable: `0x005CAD80`)
+  - **Virtuelle Funktionstabelle (18 Methoden an `0x005CD2E8`, Base `0x005CD2E0`)**:
+    | Slot | Adresse | Name / Funktion | Detaillierte Assembler- & Decompiler-Semantik |
+    | :--- | :--- | :--- | :--- |
+    | `+0x00` | `0x00436A40` | `DestructorThunk` | `8B 01 FF 20`: `mov eax, [ecx]; jmp dword ptr [eax];` (Virtueller Destruktor-Thunk) |
+    | `+0x04` | `0x0042CBC0` | `EventDispatcher` | `in_ECX[6] += delta; if (in_ECX[6] == 0) { (**(vtable+0x0C))(1); } return in_ECX[6];` (Event-Zähler an `+0x18`) |
+    | `+0x08` | `0x0042CC00` | `DeletingDestructor` | Ruft `0x0043CFE0` (deregistriert aus `DAT_0061F660`, ruft `0x0043CCA0`), bei `flags & 1` Speicherfreigabe via `0x005500F0` |
+    | `+0x0C` | `0x00402BB0` | `QueryStateSingleton` | Springt via `E9` direkt zu `0x0043D2D0` (Meyer's Singleton; initialisiert und liefert Zeiger auf `&DAT_00622074`) |
+    | `+0x10` | `0x0042CBF0` | `GetActionBuffer` | `8D 41 20 C3`: `lea eax, [ecx+0x20]; ret;` (Liefert Zeiger auf BTFB Script VTable / Action-Buffer an `+0x20`) |
+    | `+0x14` | `0x0042CBE0` | `GetActorType` | `B8 02 00 00 00 C3`: `mov eax, 2; ret;` (Typ-Identifikator `2 = BTFB_ACTOR_TYPE`) |
+    | `+0x18` | `0x0043DC80` | `ProcessStep` | `8B 44 24 04 C7 00 00 00 00 00 33 C0 C2 04 00`: Nulle Token an `[esp+4]`, liefert `0` |
+    | `+0x1C` | `0x004025A0` | `GetStatus` | `C2 08 00`: NOP `ret 8` |
+    | `+0x20` | `0x004025B0` | `Resume` | `8B C1 C2 08 00`: `mov eax, ecx; ret 8;` (Identität: Liefert `this`-Zeiger) |
+    | `+0x24` | `0x00464EF0` | `GetTimer` | `C3`: NOP `ret` |
+    | `+0x28` | `0x00402B10` | `QueryTransform` | `B8 FF FF FF 7F C3`: `mov eax, 0x7FFFFFFF; ret;` |
+    | `+0x2C` | `0x0043E6F0` | `InitNoOp` | `33 C0 C3`: `xor eax, eax; ret;` (Liefert `0`) |
+    | `+0x30` | `0x00402BD0` | `SetActionToken` | `8B 44 24 04 8B 40 08 C2 04 00`: Liest `((uint32_t*)pData)[2]` |
+    | `+0x34` | `0x00402B80` | `QueryActionToken` | `8B 54 24 04 8B 01 52 FF 50 34 89 44 24 04 DB 44 24 04 C2 04 00`: Ruft Slot 13 auf und konvertiert via `fild` zu `RwReal` auf FPU ST(0) |
+    | `+0x38` | `0x00407AB0` | `VisibilityUpdate` | Float-zu-Int Konvertierung via `_ftol` (`0x00558AF8`), Dispatch zu Slot 16 (`[edi+0x40]`) |
+    | `+0x3C` | `0x004025A0` | `StatusNoOp` | `C2 08 00`: NOP `ret 8` |
+    | `+0x40` | `0x00402BC0` | `ActionCallback` | Setzt `[esp+8] = 0` und springt via `E9` zu `0x0043D340` (Aktions-Callback-Schleife) |
+    | `+0x44` | `0x0042CDA0` | `GetStateTransitionName` | `B8 70 D3 5C 00 C3`: `mov eax, 0x005CD370; ret;` (Liefert ASCII-String `"attachers"`) |
+
+  - **Speicher-Layout der `ECProtoActor`-Struktur**:
+    | Offset | Typ | Name | Zweck / Ghidra-Referenz |
+    | :--- | :--- | :--- | :--- |
+    | `+0x00` | `void*` | `m_pVTable` | Primäre VTable `0x005CD2E8` (Base `0x005CD2E0`) |
+    | `+0x04` | `uint8_t` | `m_bActive` | 1 = Aktiv, 0 = Inaktiv |
+    | `+0x08` | `uint32_t` | `m_dwFlags` | Status-Flags |
+    | `+0x0C` | `uint32_t` | `m_dwTimer` | State- / Tick-Timer |
+    | `+0x10` | `uint32_t` | `m_dwStateId` | Aktiver Verhaltenszustand |
+    | `+0x14` | `uint32_t` | `m_dwPrevStateId` | Vorheriger Verhaltenszustand |
+    | `+0x18` | `int32_t` | `m_nEventCounter` | Event-Zähler für EventDispatcher (`0x0042CBC0`) |
+    | `+0x1C` | `uint32_t` | `m_dwActorType` | Typ-ID (Konstante 2 = BTFB_ACTOR_TYPE) |
+    | `+0x20` | `void*` | `m_pScriptVTable` | BTFB Script VTable `0x005CA3EC` |
+    | `+0x9C` | `CTFBModel*` | `m_pModel` | Gebundenes 3D-Skelett-Modell |
+    | `+0xFC` | `RwMatrix*` | `m_pRootTransform`| Transformatierte Root-Bone-Matrix |
+    | `+0x120` | `RwMatrix` | `m_localMatrix` | 4x4 Transformations-Matrix (64 Bytes, kopiert via `rep movsd` bei `0x00428EA0`) |
+    | `+0x150` | `float` | `m_vBoundingOffset[0]` | Lokaler X-Versatz (wird von `m_pRootTransform` subtrahiert) |
+    | `+0x154` | `float` | `m_vBoundingOffset[1]` | Lokaler Y-Versatz |
+    | `+0x158` | `float` | `m_vBoundingOffset[2]` | Lokaler Z-Versatz |
+    | `+0x1F0` | `float` | `m_vWorldPos.x` | **Weltkoordinate X** (geschrieben bei `0x00428E8C`) |
+    | `+0x1F4` | `float` | `m_vWorldPos.y` | **Weltkoordinate Y** (geschrieben bei `0x00428E94`) |
+    | `+0x1F8` | `float` | `m_vWorldPos.z` | **Weltkoordinate Z** (geschrieben bei `0x00428E9C`) |
+    | `+0x1FC` | `float` | `m_fGroundHeight` | Aktuelle Bodenhöhe des Actors |
+    | `+0x200` | `RwV3d` | `m_vVelocity` | Geschwindigkeit (Vx, Vy, Vz) |
+    | `+0x20C` | `float` | `m_fGravity` | Fallbeschleunigung (9.81f * 12.0f) |
+    | `+0x210` | `bool` | `m_bOnGround` | Bodenkontakt-Flag |
+    | `+0x211` | `bool` | `m_bJumping` | Sprung-Flag |
+    | `+0x214` | `ECharacterId` | `m_characterId` | Charakter-Profil (Alex, Marty, Melman, Gloria, Penguins) |
+
 - **Charakter-Physik & Koordinaten-Update (`0x004283CF`..`0x00428E9C`)**:
-  - Funktion startet exakt an `0x004283CF` mit SEH Scope Table `0x005C356B`.
-  - Integriert Geschwindigkeit, Erdbeschleunigung, Bodenreaktionskräfte und Richtungsvektoren.
-  - Schreibt die berechneten Koordinaten an `0x00428E8C` / `0x00428E9C` direkt in:
-    - `[ebp+0x1F0]`: Weltkoordinate X
-    - `[ebp+0x1F4]`: Weltkoordinate Y
-    - `[ebp+0x1F8]`: Weltkoordinate Z
+  - Exakter Start an `0x004283CF` mit SEH Scope Table `0x005C356B`, Funktionseinstieg an `0x004283E0`.
+  - Berechnet Geschwindigkeit, Erdbeschleunigung, Bodenreaktionskräfte und Richtungsvektoren.
+  - Subtrahiert den lokalen Bounding-Box-Offset von der transformierten Root-Bone-Matrix:
+    - `0x00428E8C`: `fld [eax+0x40]; fsub [ebp+0x150]; fstp dword ptr [ebp+0x1F0];` (Weltkoordinate X)
+    - `0x00428E94`: `fld [eax+0x34]; fsub [ebp+0x154]; fstp dword ptr [ebp+0x1F4];` (Weltkoordinate Y)
+    - `0x00428E9C`: `fld [eax+0x38]; fsub [ebp+0x158]; fstp dword ptr [ebp+0x1F8];` (Weltkoordinate Z)
+  - `0x00428EA0`: `rep movsd` mit `ecx = 0x10` (16 DWORDs = 64 Bytes) kopiert die 4x4 Transformations-Matrix direkt nach `[ebp+0x120]`.
+
 - **HAnim Skelett-Animation (`0x00428270: UpdateHAnimSkeletons`)**:
-  Führt den kompletten Update-Zyklus aller RenderWare HAnim-Hierarchien aus:
-  `0x00426550` $\rightarrow$ `0x0043CCA0` $\rightarrow$ `0x0044DC30` $\rightarrow$ `0x00419380` $\rightarrow$ `0x0043C9B0(DAT_00602EA0)` $\rightarrow$ `0x0042B150` $\rightarrow$ `0x00450490` $\rightarrow$ `0x00464E20` $\rightarrow$ `UpdateAudioStreams()` $\rightarrow$ `RwTextureSetMipmapping(RWTRUE)`.
+  Führt den kompletten Update-Zyklus aller RenderWare HAnim-Hierarchien über 8 dedizierte Subfunktionen aus:
+  1. `0x00426550`: `HAnimSub_TickAnimations` (Prüft `0x00618364`, treibt Animations-Zeitleiste an)
+  2. `0x0043CCA0`: `HAnimSub_UpdateNodeList` (Aktualisiert Node-Liste an `+0x10`, kopiert nach `+0x14`, triggert Node-Callbacks)
+  3. `0x0044DC30`: `HAnimSub_ResetBonePalettes` (Setzt Knochenpaletten-Zeiger an `0x0062971C` und `0x00629714` zurück)
+  4. `0x00419380`: `HAnimSub_UpdateAudioVoices` (Durchläuft Voice-Knotenkette an `0x00617FD0`)
+  5. `0x0043C9B0`: `HAnimSub_UpdateWorldHierarchies` (Aktualisiert Hierarchien aktiver Welten an `DAT_00602EA0`)
+  6. `0x0042B150`: `HAnimSub_UpdateBoneTransforms` (Iteriert Knochenrotations-Array an `0x00618378`)
+  7. `0x00450490`: `HAnimSub_UpdateModelPalettes` (Aktualisiert Skinning-Matrizen-Paletten an `0x00629F1C`)
+  8. `0x00464E20`: `HAnimSub_DispatchAnimEvents` (Broadcastet getriggerte Animationsereignisse an `0x0062A604`)
+  Anschließend: `UpdateAudioStreams()` (`0x004476F0`) und `RwTextureSetMipmapping(RWTRUE)` (`0x004E1FA0`).
+
 - **Kollisions-Solver (`0x00551380: SolvePhysicsAndCollisions`)**:
   Traversiert die doppelt verknüpfte Liste an `DAT_0062FEE4`. Für jeden aktiven Collider wird über `0x005524C0` der Collider-Status geholt und die virtuelle Löser-Methode an `(*pVTable)[4]` (`+0x10`) aufgerufen. Nach erfolgreicher Behandlung wird der Node ausgeklinkt und via `0x005500F0` freigegeben.
+
+---
+
+### 3.12. Input- & Controller-Subsystem (`src/input_and_camera.h`, `src/input_and_camera.cpp`)
+
+- **Windows & DirectInput 8 Initialisierung (`0x0051A070`)**:
+  - Sichert `g_hInputInstance = GetModuleHandleA(NULL)` an `0x0062F13C`.
+  - Initialisiert Keystate-Puffer `0x0062ED30` (255 DWORDs = 1020 Bytes) mit Nullen.
+  - Sichert Mausgeschwindigkeit: `SystemParametersInfoA(SPI_GETMOUSESPEED, 0, &DAT_0062F154, 0)` (0x70).
+  - Deaktiviert störende Windows-Barrierefreiheits-Shortcuts während des Spiels:
+    - Liest `SPI_GETSTICKYKEYS` (`0x3A`) in `DAT_0062F12C`.
+    - Maskiert Flags (`dwFlags &= 0xFFFFFFF9`) und setzt via `SPI_SETSTICKYKEYS` (`0x3B`).
+  - Sichert Bildschirmschoner-Timeout: `SystemParametersInfoA(SPI_GETSCREENSAVETIMEOUT, 0, &DAT_0062F14C, 0)` (`0x0E`).
+- **Input-Message-Pump & Screensaver-Keepalive (`0x0051A100`)**:
+  - Liest Win32-Nachrichten via `PeekMessageA`, `TranslateMessage`, `DispatchMessageA`.
+  - Setzt Bildschirmschoner-Timer via `SPI_SETSCREENSAVETIMEOUT` zurück, um Monitorabschaltung im Spiel zu verhindern.
+- **Input-Cleanup (`0x0051A1A0`)**:
+  - Stellt bei Spielende die originalen StickyKeys- und Bildschirmschoner-Einstellungen des Nutzers wieder her.
+- **`GameController` (Deskriptor `0x005CA3C8`, VTable `0x005CA5A0`)**:
+  - Singleton-Instanz an `0x0061798C` (`g_pGameController`), Klassen-Deskriptor in `.data` an `0x00602440`.
+  - **Konstruktor (`0x00402600`)**:
+    - Registriert via `RegisterRWSMessage` (`0x00550440`) die 20 kanonischen Aktions-Inquiries mit Signatur `"return RwReal"`:
+      1. `INQ_ACTN_START`, 2. `INQ_ACTN_SELECT`, 3. `INQ_ACTN_TRICK`, 4. `INQ_ACTN_FIRE`, 5. `INQ_ACTN_JUMP`,
+      6. `INQ_ACTN_DODGE`, 7. `INQ_SHOULDER_LEFT`, 8. `INQ_SHOULDER_RIGHT`, 9. `INQ_ACTN_SHOULDER_L2`, 10. `INQ_ACTN_SHOULDER_R2`,
+      11. `INQ_ACTN_PAD_L`, 12. `INQ_ACTN_PAD_R`, 13. `INQ_ACTN_PAD_U`, 14. `INQ_ACTN_PAD_D`,
+      15. `INQ_ACTN_TURN`, 16. `INQ_ACTN_FWD`, 17. `INQ_LPAD_BUTTON`, 18. `INQ_CAMERA_ROTATE`,
+      19. `INQ_CAMERA_PITCH`, 20. `INQ_RPAD_BUTTON`.
+    - Abonniert globale System-Events `iMsgStartSystem` (`0x0062A510`), `iMsgStopSystem` (`0x0062A518`) und Tick-Event `0x0062A344`.
+- **`CXboxStndController` (Deskriptor `0x005CAD5C`, VTable `0x005CAD80`)**:
+  - Klassen-Deskriptor in `.data` an `0x00602868`.
+  - **Stream-Deserialisierer (`0x00404E70`)**:
+    - Parsed sequentielle TLV-Attribute 1 bis 22 aus RWS `.stream`-Chunks.
+    - Bindet Attribute an RWS Action Queries (`FUN_00550B20` mit Typ `"return RwReal"`).
+    - Digital-Button-Bitmasken: D-Pad (`0x01`..`0x08`), Start (`0x10`), Back (`0x20`), LThumb (`0x40`), RThumb (`0x80`), A/B/X/Y (`0x100`..`0x800`), Black/White (`0x1000`/`0x2000`), LTrigger/RTrigger (`0x4000`/`0x8000`).
+    - Analog-Achsen: Left Stick X/Y, Right Stick X/Y, Trigger L2/R2 mit Totzone `0.25f` (`0x005CA654`).
+
+---
+
+### 3.13. Direktorenkamera-Pipeline (`src/input_and_camera.h`, `src/input_and_camera.cpp`)
+
+- **Setup-Orchestrierung (`0x004676A0: DirectorCamSetup`)**:
+  Initialisiert die 8 sequentiellen Stufen der RenderWare Direktorenkamera:
+  1. `0x00467680`: `DirectorCam_SetActive` - Sichert aktiven Kamera-Zeiger in `g_pDirectorCamera` (`0x0063163C`).
+  2. `0x004719C0`: `DirectorCam_InitMatrices` - Konfiguriert Transformations- und Projektionspuffer (`0x00631494`).
+  3. `0x0046F7F0`: `DirectorCam_UpdateFrustum` - Berechnet die 6 Frustum-Begrenzungsebenen für View-Frustum-Culling (`0x00631484`, `0x00631488`).
+  4. `0x0046C1F0`: `DirectorCam_SetupViewports` - Setzt Subpixel-Raster-Offsets und Viewport-Skalierung (`0x00631464`).
+  5. `0x00469800`: `DirectorCam_InitFOV` - Initialisiert horizontales und vertikales Field-of-View-Verhältnis (`0x00631468`).
+  6. `0x00470300`: `DirectorCam_SetupClipping` - Definiert Near- und Far-Clipping-Ebenen (`0x0063148C`).
+  7. `0x004677A0`: `DirectorCam_InitPostProcess` - Initialisiert Post-Processing-Puffer und Clear-Color (`0x006314E4`).
+  8. `0x00467530`: `DirectorCam_UpdateMetrics` - Extrahiert Auflösung und ViewWindow:
+     - `g_fDirectorCamRasterWidth = (float)frameBuffer->width;` (`0x00631570`)
+     - `g_fDirectorCamRasterHeight = (float)frameBuffer->height;` (`0x00631574`)
+     - `g_fDirectorCamViewWindowX = 2.0f * camera->viewWindow.x;` (`0x00631568`)
+     - `g_fDirectorCamViewWindowY = 2.0f * camera->viewWindow.y;` (`0x0063156C`)
+- **Kamera- & Target-Solver (`0x00551410: SolveCameraTarget`)**:
+  Wird in `Chunk71D_CameraTarget` (`0x00461F40`) aufgerufen. Traversiert die doppelt verknüpfte Liste an `0x0062FEE4`, ermittelt das Zielobjekt via `0x005524A0` und führt die virtuelle Ziel-Löser-Methode an `(*pVTable)[4]` (`+0x10`) aus.
+- **Kamera- und Raster-Bereinigung (`0x00462A50: RwDestroyCameraAndRasters`)**:
+  Gibt FrameBuffer-Raster, Z-Buffer-Raster und die RenderWare Kamera geordnet frei (`RwRasterDestroy`, `RwCameraDestroy`).
 
 ---
 
@@ -529,3 +637,10 @@ Bei der statischen Analyse der RenderWare-Initialisierung wurden vier konkrete U
 - [x] Runde 6: Identifikation der echten RWS Actor-Klasse `ECProtoActor` (Deskriptor `0x005CD28F`, VTable `0x005CD2E8` mit 18 Methoden) sowie der Controller `GameController` (`0x005CA3C8`) und `CXboxStndController` (`0x005CAD5C`).
 - [x] Runde 6: Dekompilation des geometrischen Trigger-Volumen-Solvers `0x004133E0` (Innen-Schleife `0x00413500`) und kanonischer RWS-Verhaltensweisen (`0x005CE3AC`..`0x005CEEDC`) in [`src\script_and_ui.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.cpp); restlose Beseitigung aller generischen Fake-Strings.
 - [x] Runde 6: Strikte Verifikation mit MSVC (`cl.exe /W4 /WX /std:c++17 /EHsc`) über alle 9 `.cpp`-Dateien: **0 Fehler, 0 Warnungen** auf x86 und x64.
+- [x] Runde 7: Beseitigung aller erfundenen `CCharacterActor`-Werte (`m_dwHealth = 150`, Animation-Strings) und vollständige Rekonstruktion von `ECProtoActor` (Deskriptor `0x005CD28F`, VTable `0x005CD2E8` mit 18 Slots) in [`src\player_and_actors.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.h) und [`src\player_and_actors.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.cpp).
+- [x] Runde 7: Rekonstruktion der echten Charakter-Physik `0x004283CF..0x00428E9C` (SEH Scope Table `0x005C356B`, Berechnung von Root-Bone-Transform minus Bounding-Offset `[ebp+0x150..0x158]`, Schreiben der Weltkoordinaten X, Y, Z in `[ebp+0x1F0..0x1F8]` und Matrix-Kopie von 64 Bytes via `rep movsd` nach `[ebp+0x120]`).
+- [x] Runde 7: Dekompilation aller 8 HAnim-Subfunktionen von `UpdateHAnimSkeletons` (`0x00428270`): `0x00426550`, `0x0043CCA0`, `0x0044DC30`, `0x00419380`, `0x0043C9B0`, `0x0042B150`, `0x00450490`, `0x00464E20`.
+- [x] Runde 7: Echte Dekompilation von Input & Controllern in [`src\input_and_camera.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.h) und [`src\input_and_camera.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.cpp) (`0x0051A070`: DirectInput_Init mit StickyKeys- und Screensaver-Management, `GameController` 0x00402600 mit 20 `INQ_*` Actions, `CXboxStndController` 0x00404E70 mit 22 TLV-Attributen).
+- [x] Runde 7: Echte Dekompilation der Direktorenkamera-Pipeline (`0x00467680`, `0x004719C0`, `0x0046F7F0`, `0x0046C1F0`, `0x00469800`, `0x00470300`, `0x004677A0`, `0x00467530`, Solver `0x00551410`, Raster-Cleanup `0x00462A50`) und Ersetzen sämtlicher roher Funktionspointer-Casts in `audio_and_frame.cpp` und `rws_core.cpp`.
+- [x] Runde 7: Strikte Verifikation mit MSVC (`cl.exe /W4 /WX /std:c++17 /EHsc`) über alle 10 `.cpp`-Dateien: **0 Fehler, 0 Warnungen** auf x86 und x64.
+

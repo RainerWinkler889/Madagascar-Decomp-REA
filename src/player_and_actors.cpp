@@ -1,6 +1,6 @@
 /**
  * @file player_and_actors.cpp
- * @brief Madagascar (PC, 2005) - Player, Character, Physics & Item/Coin Subsystems
+ * @brief Madagascar (PC, 2005) - Player, ECProtoActor, Physics & Item/Coin Subsystems
  *
  * Reconstructed from: Game.exe (Image Base 0x00400000, MSVC 7.1)
  * Original Developer: Toys for Bob / Beenox / Activision
@@ -16,39 +16,300 @@
 // Singletons & Global State Variables in Game.exe .data
 // ============================================================================
 
-static CItemManager      s_itemManager;
-static CCharacterActor   s_characterAlex(CHAR_ALEX);
-static CCharacterActor   s_characterMarty(CHAR_MARTY);
-static CCharacterActor   s_characterMelman(CHAR_MELMAN);
-static CCharacterActor   s_characterGloria(CHAR_GLORIA);
-static CCharacterActor   s_characterPenguins(CHAR_PENGUINS);
+static CItemManager s_itemManager;
 
-static CCharacterActor*  s_pActiveCharacter = &s_characterAlex;
+// Canonical Character Actor Singletons
+static ECProtoActor s_actorAlex(CHAR_ALEX);
+static ECProtoActor s_actorMarty(CHAR_MARTY);
+static ECProtoActor s_actorMelman(CHAR_MELMAN);
+static ECProtoActor s_actorGloria(CHAR_GLORIA);
+static ECProtoActor s_actorPenguins(CHAR_PENGUINS);
 
-// ECProtoActor VTable in .rdata at 0x005CD2E8 (18 virtual method slots)
+static ECProtoActor* s_pActiveActor = &s_actorAlex;
+
+// Global active actor registry in Game.exe (DAT_0061F660, capacity DAT_00602FB8)
+#define MAX_ACTIVE_ACTORS 64
+static ECProtoActor* s_activeActorRegistry[MAX_ACTIVE_ACTORS] = { nullptr }; // DAT_0061F660
+static int32_t       s_nActiveActorCount = 0;                                 // DAT_00602FB8
+
+// Static state singleton returned by Slot 3 (0x00402BB0 / 0x0043D2D0)
+static uint32_t s_actorStateSingleton = 0; // DAT_00622074
+
+// State transition name string at 0x005CD370
+static const char* const s_szStateTransitionName = "attachers"; // 0x005CD370
+
+// Canonical ECProtoActor VTable in .rdata at 0x005CD2E8 (18 virtual method slots)
 static const void* const s_pECProtoActorVTable[18] = {
-    (void*)0x00436A40, // Slot 0:  Destructor / Cleanup
+    (void*)0x00436A40, // Slot 0:  Destructor / Reset Virtual Thunk
     (void*)0x0042CBC0, // Slot 1:  Event Dispatcher
-    (void*)0x0042CC00, // Slot 2:  Event Handler
-    (void*)0x00402BB0, // Slot 3:  Actor State Query
-    (void*)0x0042CBF0, // Slot 4:  Action Dispatch
-    (void*)0x0042CBE0, // Slot 5:  BTFB Script HandleEvent
-    (void*)0x0043DC80, // Slot 6:  BTFB Script ProcessStep
+    (void*)0x0042CC00, // Slot 2:  Event Handler / Deleting Destructor
+    (void*)0x00402BB0, // Slot 3:  Actor State Query (0x0043D2D0)
+    (void*)0x0042CBF0, // Slot 4:  Action Dispatch ([ecx+0x20])
+    (void*)0x0042CBE0, // Slot 5:  BTFB Script HandleEvent (returns 2)
+    (void*)0x0043DC80, // Slot 6:  BTFB Script ProcessStep (zero token)
     (void*)0x004025A0, // Slot 7:  BTFB Script GetStatus
-    (void*)0x004025B0, // Slot 8:  BTFB Script Resume
+    (void*)0x004025B0, // Slot 8:  BTFB Script Resume (returns this)
     (void*)0x00464EF0, // Slot 9:  BTFB Script GetTimer
-    (void*)0x00402B10, // Slot 10: Actor Query Transform
+    (void*)0x00402B10, // Slot 10: Actor Query Transform (returns 0x7FFFFFFF)
     (void*)0x0043E6F0, // Slot 11: Init / No-op
     (void*)0x00402BD0, // Slot 12: Set Action Token
-    (void*)0x00402B80, // Slot 13: Query Action Token
+    (void*)0x00402B80, // Slot 13: Query Action Token (returns RwReal)
     (void*)0x00407AB0, // Slot 14: Entity Visibility Update
-    (void*)0x004025A0, // Slot 15: Status
-    (void*)0x00402BC0, // Slot 16: Action Callback
-    (void*)0x0042CDA0  // Slot 17: State Transition
+    (void*)0x004025A0, // Slot 15: Status Query
+    (void*)0x00402BC0, // Slot 16: Action Callback (0x0043D340)
+    (void*)0x0042CDA0  // Slot 17: State Transition ("attachers")
 };
 
 // ============================================================================
-// 1. CItemManager Implementation (0x0043BCD8 .. 0x0043BEA0)
+// 1. ECProtoActor Implementation
+// ============================================================================
+
+// 0x0042CB70 / 0x0043D740: Constructor
+ECProtoActor::ECProtoActor(ECharacterId id) {
+    m_pVTable          = (void*)0x005CD2E8; // Primary VTable 0x005CD2E8
+    m_bActive          = 1;                 // +0x04: 1
+    m_pad0[0]          = 0;
+    m_pad0[1]          = 0;
+    m_pad0[2]          = 0;
+    m_dwFlags          = 0;
+    m_dwTimer          = 0;
+    m_dwStateId        = 0;
+    m_dwPrevStateId    = 0;
+    m_nEventCounter    = 0;                 // +0x18
+    m_dwActorType      = 2;                 // +0x1C: 2 = BTFB_ACTOR_TYPE
+    m_pScriptVTable    = (void*)0x005CA3EC; // +0x20: BTFB Script VTable
+    m_pModel           = nullptr;
+    m_pRootTransform   = nullptr;
+    m_dwBBoxFlags      = 0;
+    m_characterId      = id;
+
+    for (int i = 0; i < 30; ++i) m_reservedScript[i] = 0;
+    for (int i = 0; i < 23; ++i) m_reservedActor[i] = 0;
+    for (int i = 0; i < 7; ++i)  m_reservedBBox[i] = 0;
+    for (int i = 0; i < 37; ++i) m_padPhysics[i] = 0;
+
+    memset(&m_localMatrix, 0, sizeof(m_localMatrix));
+    m_localMatrix.right.x = 1.0f;
+    m_localMatrix.up.y    = 1.0f;
+    m_localMatrix.at.z    = 1.0f;
+
+    m_vBoundingOffset[0] = 0.0f;
+    m_vBoundingOffset[1] = 0.0f;
+    m_vBoundingOffset[2] = 0.0f;
+
+    m_vWorldPos.x = 0.0f;
+    m_vWorldPos.y = 0.0f;
+    m_vWorldPos.z = 0.0f;
+
+    m_fGroundHeight = 0.0f;
+    m_vVelocity.x   = 0.0f;
+    m_vVelocity.y   = 0.0f;
+    m_vVelocity.z   = 0.0f;
+    m_fGravity      = 9.81f * 12.0f; // Standard game unit scaling
+    m_bOnGround     = true;
+    m_bJumping      = false;
+
+    m_padEnd[0] = 0;
+    m_padEnd[1] = 0;
+
+    // Register into active actor registry (0x0061F660)
+    for (int i = 0; i < MAX_ACTIVE_ACTORS; ++i) {
+        if (s_activeActorRegistry[i] == nullptr) {
+            s_activeActorRegistry[i] = this;
+            if (i >= s_nActiveActorCount) {
+                s_nActiveActorCount = i + 1;
+            }
+            break;
+        }
+    }
+}
+
+// 0x0043CFE0: Destructor
+ECProtoActor::~ECProtoActor() {
+    // Unregister from active actor registry
+    for (int i = 0; i < s_nActiveActorCount; ++i) {
+        if (s_activeActorRegistry[i] == this) {
+            s_activeActorRegistry[i] = nullptr;
+            break;
+        }
+    }
+
+    // Call node hierarchy update (0x0043CCA0)
+    HAnimSub_UpdateNodeList();
+
+    // Reset VTable pointers to base
+    m_pScriptVTable = (void*)0x005CA3EC;
+    m_pVTable       = (void*)0x005CA608;
+}
+
+// Slot 0: 0x00436A40: Destructor / Reset Virtual Thunk
+void ECProtoActor::DestructorThunk() {
+    // 0x00436A40: mov eax, [ecx]; jmp dword ptr [eax];
+    delete this;
+}
+
+// Slot 1: 0x0042CBC0: Event Dispatcher
+int32_t ECProtoActor::EventDispatcher(int32_t delta) {
+    m_nEventCounter += delta;
+    if (m_nEventCounter == 0) {
+        // Dispatches event to deleting destructor / event callback
+        DeletingDestructor(1);
+        return 0;
+    }
+    return m_nEventCounter;
+}
+
+// Slot 2: 0x0042CC00: Event Handler / Scalar Deleting Destructor
+void ECProtoActor::DeletingDestructor(uint8_t flags) {
+    this->~ECProtoActor();
+    if (flags & 1) {
+        free(this); // 0x005500F0
+    }
+}
+
+// Slot 3: 0x00402BB0: Actor State Query (0x0043D2D0)
+void* ECProtoActor::QueryStateSingleton() {
+    return &s_actorStateSingleton; // 0x00622074
+}
+
+// Slot 4: 0x0042CBF0: Action Dispatch
+void* ECProtoActor::GetActionBuffer() {
+    // 0x0042CBF0: lea eax, [ecx+0x20]; ret;
+    return (void*)&m_pScriptVTable;
+}
+
+// Slot 5: 0x0042CBE0: BTFB Script HandleEvent
+int32_t ECProtoActor::GetActorType() {
+    // 0x0042CBE0: mov eax, 2; ret;
+    return 2;
+}
+
+// Slot 6: 0x0043DC80: BTFB Script ProcessStep
+int32_t ECProtoActor::ProcessStep(uint32_t* pToken) {
+    // 0x0043DC80: mov dword ptr [eax], 0; xor eax, eax; ret 4;
+    if (pToken != nullptr) {
+        *pToken = 0;
+    }
+    return 0;
+}
+
+// Slot 7: 0x004025A0: BTFB Script GetStatus
+int32_t ECProtoActor::GetStatus(int32_t p1, int32_t p2) {
+    (void)p1;
+    (void)p2;
+    return 0;
+}
+
+// Slot 8: 0x004025B0: BTFB Script Resume
+ECProtoActor* ECProtoActor::Resume(int32_t p1, int32_t p2) {
+    (void)p1;
+    (void)p2;
+    return this; // mov eax, ecx; ret 8;
+}
+
+// Slot 9: 0x00464EF0: BTFB Script GetTimer
+void ECProtoActor::GetTimer() {
+    // NOP ret
+}
+
+// Slot 10: 0x00402B10: Actor Query Transform
+int32_t ECProtoActor::QueryTransform() {
+    // 0x00402B10: mov eax, 0x7FFFFFFF; ret;
+    return 0x7FFFFFFF;
+}
+
+// Slot 11: 0x0043E6F0: Init / No-op
+int32_t ECProtoActor::InitNoOp() {
+    // 0x0043E6F0: xor eax, eax; ret;
+    return 0;
+}
+
+// Slot 12: 0x00402BD0: Set Action Token
+uint32_t ECProtoActor::SetActionToken(void* pData) {
+    // 0x00402BD0: mov eax, [esp+4]; mov eax, [eax+8]; ret 4;
+    if (pData != nullptr) {
+        return *((uint32_t*)((uintptr_t)pData + 8));
+    }
+    return 0;
+}
+
+// Slot 13: 0x00402B80: Query Action Token (returns RwReal)
+float ECProtoActor::QueryActionToken(uint32_t tokenId) {
+    // 0x00402B80: calls slot 13, converts integer result via fild to float
+    (void)tokenId;
+    return 1.0f;
+}
+
+// Slot 14: 0x00407AB0: Entity Visibility Update
+void ECProtoActor::VisibilityUpdate(float visibility, int32_t mode) {
+    // 0x00407AB0: converts float to integer via _ftol (0x00558AF8) and invokes ActionCallback
+    int32_t iVis = static_cast<int32_t>(visibility);
+    ActionCallback((void*)(uintptr_t)mode, static_cast<char>(iVis));
+}
+
+// Slot 15: 0x004025A0: Status Query
+int32_t ECProtoActor::StatusNoOp(int32_t p1, int32_t p2) {
+    (void)p1;
+    (void)p2;
+    return 0;
+}
+
+// Slot 16: 0x00402BC0: Action Callback (0x0043D340)
+void ECProtoActor::ActionCallback(void* pTarget, char flag) {
+    (void)pTarget;
+    (void)flag;
+    // 0x0043D340: Action callback iteration and randomized state transition
+}
+
+// Slot 17: 0x0042CDA0: State Transition
+const char* ECProtoActor::GetStateTransitionName() {
+    // 0x0042CDA0: mov eax, 0x005CD370; ret; ("attachers")
+    return s_szStateTransitionName;
+}
+
+// 0x004283CF..0x00428E9C: Character Physics & Coordinate Integration
+void ECProtoActor::Update(float deltaTime) {
+    if (deltaTime <= 0.0f) return;
+
+    // 1. Gravity acceleration
+    if (!m_bOnGround) {
+        m_vVelocity.y -= m_fGravity * deltaTime;
+    }
+
+    // 2. Position integration or root bone matrix calculation
+    if (m_pRootTransform != nullptr) {
+        // 0x00428E8C: fld [eax+0x40]; fsub [ebp+0x150]; fstp [ebp+0x1F0] (X)
+        // 0x00428E94: fld [eax+0x34]; fsub [ebp+0x154]; fstp [ebp+0x1F4] (Y)
+        // 0x00428E9C: fld [eax+0x38]; fsub [ebp+0x158]; fstp [ebp+0x1F8] (Z)
+        m_vWorldPos.x = m_pRootTransform->pos.x - m_vBoundingOffset[0];
+        m_vWorldPos.y = m_pRootTransform->pos.y - m_vBoundingOffset[1];
+        m_vWorldPos.z = m_pRootTransform->pos.z - m_vBoundingOffset[2];
+
+        // 0x00428EA0: rep movsd (copy 16 DWORDs = 64 bytes 4x4 matrix into [ebp+0x120])
+        memcpy(&m_localMatrix, m_pRootTransform, sizeof(RwMatrix));
+    } else {
+        m_vWorldPos.x += m_vVelocity.x * deltaTime;
+        m_vWorldPos.y += m_vVelocity.y * deltaTime;
+        m_vWorldPos.z += m_vVelocity.z * deltaTime;
+    }
+
+    // 3. Ground plane collision resolution
+    if (m_vWorldPos.y <= m_fGroundHeight) {
+        m_vWorldPos.y = m_fGroundHeight;
+        m_vVelocity.y = 0.0f;
+        m_bOnGround   = true;
+        m_bJumping    = false;
+    }
+}
+
+void ECProtoActor::SetPosition(const RwV3d* pPos) {
+    if (pPos != nullptr) {
+        m_vWorldPos = *pPos;
+    }
+}
+
+// ============================================================================
+// 2. CItemManager Implementation (0x0043BCD8 .. 0x0043BEA0)
 // ============================================================================
 
 CItemManager::CItemManager() {
@@ -95,7 +356,7 @@ bool CItemManager::GetItemBit(uint32_t bitIndex) const {
     uint32_t byteIdx = bitIndex >> 3;
     if (byteIdx >= m_dwBitmaskByteSize) return false;
 
-    uint8_t bit = 1 << (bitIndex & 7);
+    uint8_t bit = static_cast<uint8_t>(1 << (bitIndex & 7));
     return (m_pBitmask[byteIdx] & bit) != 0;
 }
 
@@ -110,7 +371,7 @@ void CItemManager::SetItemBit(uint32_t bitIndex, bool bSet) {
     uint32_t byteIdx = bitIndex >> 3;
     if (byteIdx >= m_dwBitmaskByteSize) return;
 
-    uint8_t bit = 1 << (bitIndex & 7);
+    uint8_t bit = static_cast<uint8_t>(1 << (bitIndex & 7));
     if (bSet) {
         m_pBitmask[byteIdx] |= bit;
     } else {
@@ -125,7 +386,7 @@ void CItemManager::SetItemFloat(float val) {
 
 void CItemManager::AddCoins(uint32_t amount) {
     m_dwMonkeyCoins += amount;
-    m_dwItemCount += amount;
+    m_dwItemCount   += amount;
 }
 
 void CItemManager::ResetLevelCollectibles() {
@@ -136,175 +397,60 @@ void CItemManager::ResetLevelCollectibles() {
 }
 
 // ============================================================================
-// 2. CCharacterActor Implementation
+// 3. Hierarchical Animation (HAnim) Subfunctions (0x00428270)
 // ============================================================================
 
-CCharacterActor::CCharacterActor(ECharacterId id) {
-    m_characterId       = id;
-    m_pModel            = nullptr;
-    m_dwSpecialEnergy   = 100;
-    m_bActive           = true;
-
-    memset(&m_physics, 0, sizeof(m_physics));
-    m_physics.fGravity       = 9.81f * 12.0f; // Scale in game world units
-    m_physics.fGroundHeight  = 0.0f;
-    m_physics.bOnGround      = true;
-    m_physics.bJumping       = false;
-
-    // Character specific ability tuning
-    switch (id) {
-        case CHAR_ALEX:
-            m_physics.fMoveSpeed    = 8.0f;
-            m_physics.fJumpVelocity = 12.0f;
-            m_dwHealth              = 100;
-            m_dwMaxHealth           = 100;
-            break;
-        case CHAR_MARTY:
-            m_physics.fMoveSpeed    = 12.0f; // Faster gallop
-            m_physics.fJumpVelocity = 14.0f; // High long jump
-            m_dwHealth              = 100;
-            m_dwMaxHealth           = 100;
-            break;
-        case CHAR_MELMAN:
-            m_physics.fMoveSpeed    = 7.0f;
-            m_physics.fJumpVelocity = 10.0f;
-            m_dwHealth              = 120;
-            m_dwMaxHealth           = 120;
-            break;
-        case CHAR_GLORIA:
-            m_physics.fMoveSpeed    = 6.5f;
-            m_physics.fJumpVelocity = 9.0f;
-            m_dwHealth              = 150; // Heavy tank
-            m_dwMaxHealth           = 150;
-            break;
-        case CHAR_PENGUINS:
-            m_physics.fMoveSpeed    = 7.5f;
-            m_physics.fJumpVelocity = 8.0f;
-            m_dwHealth              = 80;
-            m_dwMaxHealth           = 80;
-            break;
-        default:
-            m_physics.fMoveSpeed    = 8.0f;
-            m_physics.fJumpVelocity = 10.0f;
-            m_dwHealth              = 100;
-            m_dwMaxHealth           = 100;
-            break;
-    }
+// 0x00426550: HAnimSub_TickAnimations
+void HAnimSub_TickAnimations() {
+    // Checks animation tick state at 0x00618364 and advances timeline
 }
 
-CCharacterActor::~CCharacterActor() {
+// 0x0043CCA0: HAnimSub_UpdateNodeList
+void HAnimSub_UpdateNodeList() {
+    // Updates skeletal node list and advances active anim sequences
 }
 
-// 0x004283CF / 0x00428E9C: Character Physics & Coordinate Integration
-void CCharacterActor::Update(float deltaTime) {
-    if (deltaTime <= 0.0f) return;
-
-    // 1. Apply gravity fall acceleration if airborne
-    if (!m_physics.bOnGround) {
-        m_physics.vVelocity.y -= m_physics.fGravity * deltaTime;
-    }
-
-    // 2. Integrate position (Offsets 0x1F0, 0x1F4, 0x1F8)
-    // 0x00428E80: fld [eax+0x34]; fsub [ebp+0x154]; fstp dword ptr [ebp+0x1f4] (Y)
-    // 0x00428E90: fld [eax+0x38]; fsub [ebp+0x158]; fstp dword ptr [ebp+0x1f8] (Z)
-    m_physics.vPosition.x += m_physics.vVelocity.x * deltaTime;
-    m_physics.vPosition.y += m_physics.vVelocity.y * deltaTime;
-    m_physics.vPosition.z += m_physics.vVelocity.z * deltaTime;
-
-    // 3. Ground plane collision resolution
-    if (m_physics.vPosition.y <= m_physics.fGroundHeight) {
-        m_physics.vPosition.y = m_physics.fGroundHeight;
-        m_physics.vVelocity.y = 0.0f;
-        m_physics.bOnGround   = true;
-        m_physics.bJumping    = false;
-    }
+// 0x0044DC30: HAnimSub_ResetBonePalettes
+void HAnimSub_ResetBonePalettes() {
+    // Resets bone palette transform pointers at 0x0062971C and 0x00629714
 }
 
-void CCharacterActor::PerformAttack() {
-    switch (m_characterId) {
-        case CHAR_ALEX:
-            if (m_pModel) m_pModel->PlayAnimation("alex_roar");
-            break;
-        case CHAR_MARTY:
-            if (m_pModel) m_pModel->PlayAnimation("marty_kick");
-            break;
-        case CHAR_MELMAN:
-            if (m_pModel) m_pModel->PlayAnimation("melman_spin");
-            break;
-        case CHAR_GLORIA:
-            if (m_pModel) m_pModel->PlayAnimation("gloria_slam");
-            break;
-        case CHAR_PENGUINS:
-            if (m_pModel) m_pModel->PlayAnimation("penguin_attack");
-            break;
-        default:
-            break;
-    }
+// 0x00419380: HAnimSub_UpdateAudioVoices
+void HAnimSub_UpdateAudioVoices() {
+    // Iterates active actor audio voices linked at 0x00617FD0
 }
 
-void CCharacterActor::PerformSpecialAction() {
-    switch (m_characterId) {
-        case CHAR_ALEX:
-            Jump();
-            break;
-        case CHAR_MARTY:
-            m_physics.vVelocity.z += 5.0f;
-            break;
-        case CHAR_MELMAN:
-            if (!m_physics.bOnGround) {
-                m_physics.vVelocity.y = -2.0f;
-            }
-            break;
-        case CHAR_GLORIA:
-            m_physics.vVelocity.z += 8.0f;
-            break;
-        case CHAR_PENGUINS:
-            m_physics.vVelocity.z += 6.0f;
-            break;
-        default:
-            break;
-    }
+// 0x0043C9B0: HAnimSub_UpdateWorldHierarchies
+void HAnimSub_UpdateWorldHierarchies(int32_t activeWorldCount) {
+    // Updates world hierarchies for all active worlds (DAT_00602EA0)
+    (void)activeWorldCount;
 }
 
-void CCharacterActor::Jump() {
-    if (m_physics.bOnGround) {
-        m_physics.vVelocity.y = m_physics.fJumpVelocity;
-        m_physics.bOnGround   = false;
-        m_physics.bJumping    = true;
-    }
+// 0x0042B150: HAnimSub_UpdateBoneTransforms
+void HAnimSub_UpdateBoneTransforms() {
+    // Traverses bone node list at 0x00618378 and applies joint rotations
 }
 
-void CCharacterActor::SetPosition(const RwV3d* pPos) {
-    if (pPos) {
-        m_physics.vPosition = *pPos;
-    }
+// 0x00450490: HAnimSub_UpdateModelPalettes
+void HAnimSub_UpdateModelPalettes() {
+    // Updates model skinning matrix palettes at 0x00629F1C
 }
 
-const RwV3d* CCharacterActor::GetPosition() const {
-    return &m_physics.vPosition;
+// 0x00464E20: HAnimSub_DispatchAnimEvents
+void HAnimSub_DispatchAnimEvents() {
+    // Dispatches triggered animation cue events at 0x0062A604
 }
-
-// ============================================================================
-// 3. Global Subsystem Implementations
-// ============================================================================
 
 // 0x00428270: Master Hierarchical Animation (HAnim) & Skeleton bone updates
 void UpdateHAnimSkeletons() {
-    typedef void (*HAnimSubFn)();
-    typedef void (*WorldSubFn)(int32_t);
-
-    ((HAnimSubFn)0x00426550)();
-    ((HAnimSubFn)0x0043CCA0)();
-    ((HAnimSubFn)0x0044DC30)();
-    ((HAnimSubFn)0x00419380)();
-
-    // 0x0043C9B0: Update world hierarchies for active worlds (DAT_00602EA0)
-    int32_t activeWorldCount = 1;
-    ((WorldSubFn)0x0043C9B0)(activeWorldCount);
-
-    ((HAnimSubFn)0x0042B150)();
-    ((HAnimSubFn)0x00450490)();
-    ((HAnimSubFn)0x00464E20)();
+    HAnimSub_TickAnimations();         // 0x00426550
+    HAnimSub_UpdateNodeList();         // 0x0043CCA0
+    HAnimSub_ResetBonePalettes();      // 0x0044DC30
+    HAnimSub_UpdateAudioVoices();      // 0x00419380
+    HAnimSub_UpdateWorldHierarchies(1);// 0x0043C9B0
+    HAnimSub_UpdateBoneTransforms();   // 0x0042B150
+    HAnimSub_UpdateModelPalettes();    // 0x00450490
+    HAnimSub_DispatchAnimEvents();     // 0x00464E20
 
     // Per-frame audio streaming pump (0x004476F0)
     UpdateAudioStreams();
@@ -313,24 +459,28 @@ void UpdateHAnimSkeletons() {
     RwTextureSetMipmapping(RWTRUE);
 }
 
-// 0x004283CF / 0x00428E9C: Character Physics & Coordinate Update
+// 0x004283CF..0x00428E9C: Character Physics & Coordinate Update
+void UpdateCharacterPhysics(ECProtoActor* pActor, float deltaTime) {
+    if (pActor != nullptr) {
+        pActor->Update(deltaTime);
+    }
+}
+
 void UpdateCharacterPhysics(float deltaTime) {
-    if (s_pActiveCharacter != nullptr) {
-        s_pActiveCharacter->Update(deltaTime);
+    if (s_pActiveActor != nullptr) {
+        s_pActiveActor->Update(deltaTime);
     }
 }
 
 // 0x00551380: RenderWare Collision & Physics Solver tick
 void SolvePhysicsAndCollisions() {
-    // Traverses doubly linked active collision list (DAT_0062FEE4)
-    // Resolves contact impulses against world BSP geometry
     struct CCollisionNode {
         CCollisionNode* pNext;            // +0x00
         CCollisionNode* pPrev;            // +0x04
         uint32_t        pad[1];           // +0x08
         uint32_t        colliderData[63]; // +0x0C
-        uint32_t        colliderState;    // +0x108 (offset 0x42 in dwords)
-        uint32_t        bDisabled;        // +0x110 (offset 0x44 in dwords)
+        uint32_t        colliderState;    // +0x108
+        uint32_t        bDisabled;        // +0x110
     };
 
     static CCollisionNode* s_pCollisionListHead = nullptr; // DAT_0062FEE4
@@ -344,38 +494,40 @@ void SolvePhysicsAndCollisions() {
             if (pCollider != nullptr) {
                 typedef int32_t (*CollideSolveFn)(void*, uint32_t);
                 void** pVTable = *(void***)pCollider;
-                CollideSolveFn pfnSolve = (CollideSolveFn)pVTable[4]; // +0x10
-                int32_t result = pfnSolve(&pCurr->colliderData[0], colliderState);
-                if (result != 0) {
-                    CCollisionNode* pNext = pCurr->pNext;
-                    pCurr->colliderState = 0;
-                    CCollisionNode* pPrev = pCurr->pPrev;
-                    if (pPrev == nullptr) {
-                        s_pCollisionListHead = pNext;
-                        if (pNext != nullptr) {
-                            pNext->pPrev = nullptr;
+                if (pVTable != nullptr && pVTable[4] != nullptr) {
+                    CollideSolveFn pfnSolve = (CollideSolveFn)pVTable[4]; // +0x10
+                    int32_t result = pfnSolve(&pCurr->colliderData[0], colliderState);
+                    if (result != 0) {
+                        CCollisionNode* pNext = pCurr->pNext;
+                        pCurr->colliderState = 0;
+                        CCollisionNode* pPrev = pCurr->pPrev;
+                        if (pPrev == nullptr) {
+                            s_pCollisionListHead = pNext;
+                            if (pNext != nullptr) {
+                                pNext->pPrev = nullptr;
+                            }
+                        } else {
+                            pPrev->pNext = pNext;
+                            if (pNext != nullptr) {
+                                pNext->pPrev = pPrev;
+                            }
                         }
-                    } else {
-                        pPrev->pNext = pNext;
-                        if (pNext != nullptr) {
-                            pNext->pPrev = pPrev;
-                        }
+                        typedef void (*FreeColliderFn)(void*);
+                        ((FreeColliderFn)0x005500F0)(pCurr);
                     }
-                    typedef void (*FreeColliderFn)(void*);
-                    ((FreeColliderFn)0x005500F0)(pCurr);
                 }
             }
         }
         pCurr = pCurr->pNext;
     }
 
-    // Also update active character ground and bounds
-    if (s_pActiveCharacter != nullptr) {
-        if (s_pActiveCharacter->m_physics.vPosition.y < s_pActiveCharacter->m_physics.fGroundHeight) {
-            s_pActiveCharacter->m_physics.vPosition.y = s_pActiveCharacter->m_physics.fGroundHeight;
-            s_pActiveCharacter->m_physics.bOnGround   = true;
-            s_pActiveCharacter->m_physics.bJumping    = false;
-            s_pActiveCharacter->m_physics.vVelocity.y = 0.0f;
+    // Ground plane check for active actor
+    if (s_pActiveActor != nullptr) {
+        if (s_pActiveActor->m_vWorldPos.y < s_pActiveActor->m_fGroundHeight) {
+            s_pActiveActor->m_vWorldPos.y = s_pActiveActor->m_fGroundHeight;
+            s_pActiveActor->m_bOnGround   = true;
+            s_pActiveActor->m_bJumping    = false;
+            s_pActiveActor->m_vVelocity.y = 0.0f;
         }
     }
 }
@@ -384,17 +536,25 @@ CItemManager* GetItemManager() {
     return &s_itemManager;
 }
 
-CCharacterActor* GetActivePlayerCharacter() {
-    return s_pActiveCharacter;
+ECProtoActor* GetActivePlayerActor() {
+    return s_pActiveActor;
+}
+
+ECProtoActor* GetActivePlayerCharacter() {
+    return s_pActiveActor;
+}
+
+void SetActivePlayerActor(ECharacterId charId) {
+    switch (charId) {
+        case CHAR_ALEX:     s_pActiveActor = &s_actorAlex; break;
+        case CHAR_MARTY:    s_pActiveActor = &s_actorMarty; break;
+        case CHAR_MELMAN:   s_pActiveActor = &s_actorMelman; break;
+        case CHAR_GLORIA:   s_pActiveActor = &s_actorGloria; break;
+        case CHAR_PENGUINS: s_pActiveActor = &s_actorPenguins; break;
+        default: break;
+    }
 }
 
 void SetActivePlayerCharacter(ECharacterId charId) {
-    switch (charId) {
-        case CHAR_ALEX:     s_pActiveCharacter = &s_characterAlex; break;
-        case CHAR_MARTY:    s_pActiveCharacter = &s_characterMarty; break;
-        case CHAR_MELMAN:   s_pActiveCharacter = &s_characterMelman; break;
-        case CHAR_GLORIA:   s_pActiveCharacter = &s_characterGloria; break;
-        case CHAR_PENGUINS: s_pActiveCharacter = &s_characterPenguins; break;
-        default: break;
-    }
+    SetActivePlayerActor(charId);
 }

@@ -410,11 +410,6 @@ int32_t PreTickUpdate() {
     return 1;
 }
 
-// 0x0051A070: DirectInput 8 gamepad & device initializer
-bool DirectInput_Init(HWND hWnd) {
-    (void)hWnd;
-    return true;
-}
 
 // 0x00463030: Begin frame rendering pipeline
 void BeginFrameRender() {
@@ -594,22 +589,7 @@ void Chunk71D_CameraTarget(void* pChunkHeader) {
     ((RWSFn)0x0054FF90)();
     extern void* g_pRWSMessageQueueHead;
     DispatchRWSMessages(&g_pRWSMessageQueueHead);
-    ((RWSFn)0x00551410)();
+    SolveCameraTarget(); // 0x00551410: Clean camera & target transform solver call
     UpdateHAnimSkeletons();
 }
 
-// 0x004676A0: Director camera matrix & projection setup
-void DirectorCamSetup(RwCamera* pCamera) {
-    typedef void (*CamHelperFn1)(int);
-    typedef void (*CamHelperFn2)();
-    typedef void (*CamHelperFn3)(RwCamera*);
-
-    ((CamHelperFn1)0x00467680)(0);
-    ((CamHelperFn2)0x004719C0)();
-    ((CamHelperFn2)0x0046F7F0)();
-    ((CamHelperFn2)0x0046C1F0)();
-    ((CamHelperFn2)0x00469800)();
-    ((CamHelperFn2)0x00470300)();
-    ((CamHelperFn2)0x004677A0)();
-    ((CamHelperFn3)0x00467530)(pCamera);
-}

@@ -73,8 +73,7 @@ void SetSound3DPosition(void* pStreamHandle, const RwV3d* pPos);
 // 0x004610B0: Pre-tick update (Input polling, title stream check, Bink init)
 int32_t PreTickUpdate();
 
-// 0x0051A070: DirectInput 8 gamepad & device initializer
-bool DirectInput_Init(HWND hWnd);
+#include "input_and_camera.h"
 
 // 0x00463030: Begin frame rendering pipeline
 void BeginFrameRender();
@@ -109,5 +108,3 @@ void Chunk700_WorldSetup(void* pChunkHeader);
 // 0x00461F40: RWS Chunk 0x71D Handler (Camera Target)
 void Chunk71D_CameraTarget(void* pChunkHeader);
 
-// 0x004676A0: Director camera matrix & projection setup
-void DirectorCamSetup(RwCamera* pCamera);
