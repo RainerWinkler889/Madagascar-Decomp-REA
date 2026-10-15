@@ -46,9 +46,6 @@ uint32_t g_dwEffectVolumeSetting = 75; // 0x00617FC8
 // 0x0062A1F8: Global Asset / Path Resolver Context
 static uint8_t s_assetResolverContext[0x100] = { 0 }; // 0x0062A1F8
 
-// 0x0062F12C: StickyKeys system backup structure
-static STICKYKEYS s_stickyKeysBackup = { sizeof(STICKYKEYS), 0 }; // 0x0062F12C
-
 // 0x0062F174 & 0x0062F178: Async File Handles for Save/Settings
 static HANDLE s_hSaveFileHandle1 = nullptr; // 0x0062F174
 static HANDLE s_hSaveFileHandle2 = nullptr; // 0x0062F178
@@ -406,23 +403,6 @@ int32_t SetupFileSystemDrives() {
 // ============================================================================
 void* ResolveAssetPath() {
     return (void*)s_assetResolverContext; // 0x0062A1F8
-}
-
-// ============================================================================
-// 0x0051A1A0: CleanupInput
-//
-// Destroys DirectInput device acquisitions, restores sticky keys settings,
-// and terminates the main window if still open.
-// ============================================================================
-void CleanupInput() {
-    // Restore StickyKeys OS setting
-    SystemParametersInfoA(SPI_SETSTICKYKEYS, sizeof(STICKYKEYS), &s_stickyKeysBackup, 0);
-
-    // Destroy main window if still alive
-    if (g_hMainWindow != nullptr) {
-        DestroyWindow(g_hMainWindow);
-        g_hMainWindow = nullptr;
-    }
 }
 
 // ============================================================================

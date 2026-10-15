@@ -99,18 +99,26 @@ void ProcessWindowsInputMessages() {
 
 // 0x0051A1A0: CleanupInput
 void CleanupInput() {
-    // 1. Restore original sticky keys configuration
-    if (g_originalStickyKeys.cbSize == sizeof(STICKYKEYS)) {
-        SystemParametersInfoA(SPI_SETSTICKYKEYS, sizeof(STICKYKEYS), &g_originalStickyKeys, 0);
+    // 1. Reset input buffer / release acquisitions (0x0062ED30 .. 0x0062F12C)
+    for (int i = 0; i < 255; ++i) {
+        if (g_dwKeystateBuffer[i] != 0) {
+            g_dwKeystateBuffer[i] = 0;
+        }
     }
 
-    // 2. Restore original screensaver timeout
+    // 2. Restore original sticky keys configuration (0x0062F12C)
+    SystemParametersInfoA(SPI_SETSTICKYKEYS, sizeof(STICKYKEYS), &g_originalStickyKeys, 0);
+
+    // 3. Restore original screensaver timeout
     if (g_dwOriginalScreenSaverTimeout != 0) {
         SystemParametersInfoA(SPI_SETSCREENSAVETIMEOUT, g_dwOriginalScreenSaverTimeout, nullptr, 0);
     }
 
-    // 3. Reset input buffer
-    memset(g_dwKeystateBuffer, 0, sizeof(g_dwKeystateBuffer));
+    // 4. Destroy main window if still alive (0x0062F138)
+    if (g_hMainWindow != nullptr) {
+        DestroyWindow(g_hMainWindow);
+        g_hMainWindow = nullptr;
+    }
 }
 
 // 0x0051A210: RestoreAccessibilityShortcuts
@@ -295,13 +303,43 @@ CXboxStndController::~CXboxStndController() {
 
 // 0x00404E70: Stream Deserializer
 void CXboxStndController::DeserializeStream(void* pStreamHandle) {
-    (void)pStreamHandle;
-    // Iterates 22 TLV attributes in .stream file chunk and binds action inquiries
-    // with return type "return RwReal" (0x00550B20)
-    for (int i = 0; i < 22; ++i) {
-        char attrName[32];
-        snprintf(attrName, sizeof(attrName), "XBOX_ACTN_%02d", i + 1);
-        RegisterRWSMessage(&m_pAttributes[i], attrName, 0);
+    if (pStreamHandle == nullptr) return;
+
+    typedef char (*StreamAtEndFn)();
+    typedef uint32_t (*ReadTagFn)();
+    typedef void* (*ReadPayloadFn)();
+    typedef void (*NextAttrFn)();
+    typedef void (*BindAttrFn)(void*, void*, const char*);
+
+    StreamAtEndFn  pfnStreamAtEnd  = (StreamAtEndFn)0x0054FE20;
+    ReadTagFn      pfnReadTag      = (ReadTagFn)0x0054FDF0;
+    ReadPayloadFn  pfnReadPayload  = (ReadPayloadFn)0x0054FEC0;
+    NextAttrFn     pfnNextAttr     = (NextAttrFn)0x0054FEA0;
+    BindAttrFn     pfnBindAttr     = (BindAttrFn)0x00550B20;
+
+    // Stream validation hooks (0x00410380, 0x00550020)
+    typedef void (*StreamHookFn)(void*);
+    typedef void (*StreamClassHookFn)(void*, void*);
+    ((StreamHookFn)0x00410380)(pStreamHandle);
+    ((StreamClassHookFn)0x00550020)(pStreamHandle, (void*)0x00602868);
+
+    while (pfnStreamAtEnd() == 0) {
+        pfnReadPayload();
+        uint32_t tag = pfnReadTag();
+
+        if (tag >= 1 && tag <= 22) {
+            uint8_t* pAttrDest = ((uint8_t*)this) + 0x1C + (tag - 1) * 0x18;
+            void* pPayload = pfnReadPayload();
+            void* pAttrSource = (void*)((uintptr_t)pPayload + 8);
+
+            pfnBindAttr(pAttrDest, pAttrSource, "return RwReal");
+
+            if (tag - 1 < 22) {
+                m_pAttributes[tag - 1] = pAttrSource;
+            }
+        }
+
+        pfnNextAttr();
     }
 }
 
@@ -325,47 +363,182 @@ float CXboxStndController::GetAxis(uint32_t axisIndex) const {
 // 4. Director Camera Pipeline Implementation (0x004676A0 & Chunk 0x71D)
 // ============================================================================
 
+// Global buffers and state in Game.exe .data (0x00631460 .. 0x0063166C)
+static void* g_pDirectorCamViewportData2 = nullptr; // 0x00631460
+static void* g_pDirectorCamViewportData1 = nullptr; // 0x00631464
+static void* g_pDirectorCamFOVBuf1       = nullptr; // 0x00631468
+static void* g_pDirectorCamFontData     = nullptr; // 0x0063146C
+static uint32_t g_dwDirectorCamFontCount = 0;       // 0x00631470
+static void* g_pDirectorCamFOVBuf2       = nullptr; // 0x00631474
+static uint32_t g_dwDirectorCamMetric1   = 0;       // 0x00631478
+static uint32_t g_dwDirectorCamMetric2   = 0;       // 0x0063147C
+static uint32_t g_dwDirectorCamMetric3   = 0;       // 0x00631480
+static void* g_pDirectorCamFrustumPlanes = nullptr; // 0x00631484
+static void* g_pDirectorCamFrustumState  = nullptr; // 0x00631488
+static void* g_pDirectorCamClipBuffer    = nullptr; // 0x0063148C
+static void* g_pDirectorCamMatrixBuf1   = nullptr; // 0x00631494
+static void* g_pDirectorCamMatrixBuf2   = nullptr; // 0x00631498
+static uint16_t g_directorCamIndices[384] = { 0 }; // 0x00631160 (0x180 elements)
+static void* g_pPostProcessSlots[32]     = { nullptr }; // 0x006314E4
+static uint16_t g_postProcessIndexBuffer[256] = { 0 };  // 0x00630F60
+static uint32_t g_dwPostProcessFlags     = 0;       // 0x006314B0
+
 // 0x00467680: Set active Director Camera
 int32_t DirectorCam_SetActive(RwCamera* pCamera) {
     g_pDirectorCamera = pCamera; // 0x0063163C
     return 1;
 }
 
-// 0x004719C0: Initialize view and projection matrix buffers (0x00631494)
+// 0x004719C0: Initialize view and projection matrix buffers (0x00631494, 0x00631498)
 void DirectorCam_InitMatrices() {
-    // Configures primary projection transformation buffer
-    // Reconstructed from 0x004719C0
+    typedef void* (*AllocBufFn)(uint32_t, uint32_t, uint32_t, uint32_t, void*, uint32_t);
+    AllocBufFn pfnAlloc = (AllocBufFn)0x004E1880;
+
+    uint32_t p1 = *(uint32_t*)0x00606E68;
+    uint32_t p2 = *(uint32_t*)0x00606E6C;
+    g_pDirectorCamMatrixBuf1 = pfnAlloc(8, p1, 4, p2, (void*)0x0062A70C, 0x40190);
+
+    uint32_t p3 = *(uint32_t*)0x00606E60;
+    uint32_t p4 = *(uint32_t*)0x00606E64;
+    g_pDirectorCamMatrixBuf2 = pfnAlloc(0x14, p3, 4, p4, (void*)0x0062A6E8, 0x40190);
 }
 
 // 0x0046F7F0: Update view frustum boundary planes (0x00631484, 0x00631488)
 void DirectorCam_UpdateFrustum() {
-    // Updates 6 canonical bounding planes for camera view culling
-    // Reconstructed from 0x0046F7F0
+    typedef void* (*AllocBufFn)(uint32_t, uint32_t, uint32_t, uint32_t, void*, uint32_t);
+    AllocBufFn pfnAlloc = (AllocBufFn)0x004E1880;
+
+    uint32_t p1 = *(uint32_t*)0x00606E50;
+    uint32_t p2 = *(uint32_t*)0x00606E54;
+    g_pDirectorCamFrustumPlanes = pfnAlloc(0x1C, p1, 4, p2, (void*)0x0062A690, 0x401A1);
+
+    typedef void* (*CreateFrustumFn)();
+    typedef void (*SetupFrustumFn)(void*);
+    g_pDirectorCamFrustumState = ((CreateFrustumFn)0x0046F590)();
+    ((SetupFrustumFn)0x0046F610)(g_pDirectorCamFrustumState);
 }
 
 // 0x0046C1F0: Setup viewports, subpixel raster offsets and aspect ratio (0x00631464)
 void DirectorCam_SetupViewports() {
-    // Configures viewport offset and display metrics
-    // Reconstructed from 0x0046C1F0
+    uintptr_t devPtr = *(uintptr_t*)0x0062AC18;
+    if (devPtr != 0) {
+        typedef void* (*DevAllocFn)(uint32_t, uint32_t);
+        DevAllocFn pfnDevAlloc = *(DevAllocFn*)(devPtr + 0x108);
+        if (pfnDevAlloc != nullptr) {
+            g_pDirectorCamViewportData1 = pfnDevAlloc(0x2400, 0x40190);
+        }
+    }
+
+    typedef void* (*AllocBufFn)(uint32_t, uint32_t, uint32_t, uint32_t, void*, uint32_t);
+    AllocBufFn pfnAlloc = (AllocBufFn)0x004E1880;
+    uint32_t p1 = *(uint32_t*)0x00606E48;
+    uint32_t p2 = *(uint32_t*)0x00606E4C;
+    g_pDirectorCamViewportData2 = pfnAlloc(0x78, p1, 0x10, p2, (void*)0x0062A66C, 0x401A2);
 }
 
 // 0x00469800: Initialize field-of-view parameters and perspective scaling (0x00631468)
 void DirectorCam_InitFOV() {
-    // Sets horizontal & vertical FOV ratios
-    // Reconstructed from 0x00469800
+    typedef void* (*AllocBufFn)(uint32_t, uint32_t, uint32_t, uint32_t, void*, uint32_t);
+    AllocBufFn pfnAlloc = (AllocBufFn)0x004E1880;
+
+    uint32_t p1 = *(uint32_t*)0x00606E00;
+    uint32_t p2 = *(uint32_t*)0x00606E04;
+    g_pDirectorCamFOVBuf1 = pfnAlloc(0x244, p1, 4, p2, (void*)0x0062A648, 0x40199);
+    if (!g_pDirectorCamFOVBuf1) return;
+
+    uint32_t p3 = *(uint32_t*)0x00606E08;
+    uint32_t p4 = *(uint32_t*)0x00606E0C;
+    g_pDirectorCamFOVBuf2 = pfnAlloc(0x0C, p3, 4, p4, (void*)0x0062A624, 0x40190);
+    if (!g_pDirectorCamFOVBuf2) return;
+
+    uintptr_t devPtr = *(uintptr_t*)0x0062AC18;
+    if (devPtr != 0) {
+        typedef void* (*DevAllocFn)(uint32_t, uint32_t);
+        DevAllocFn pfnDevAlloc = *(DevAllocFn*)(devPtr + 0x108);
+        if (pfnDevAlloc != nullptr) {
+            g_pDirectorCamFontData = pfnDevAlloc(0x51, 0x1040190);
+        }
+    }
+    if (!g_pDirectorCamFontData) return;
+
+    g_dwDirectorCamFontCount = 0x51;
+    typedef void (*InitFontFn)(const char*);
+    ((InitFontFn)0x004699B0)("fonts\\");
+
+    int16_t baseVertex = 0;
+    for (int i = 0; i < 0x180; i += 6) {
+        g_directorCamIndices[i + 0] = baseVertex;
+        g_directorCamIndices[i + 1] = (int16_t)(baseVertex + 2);
+        g_directorCamIndices[i + 2] = (int16_t)(baseVertex + 3);
+        g_directorCamIndices[i + 3] = baseVertex;
+        g_directorCamIndices[i + 4] = (int16_t)(baseVertex + 3);
+        g_directorCamIndices[i + 5] = (int16_t)(baseVertex + 1);
+        baseVertex = (int16_t)(baseVertex + 4);
+    }
+
+    g_dwDirectorCamMetric1 = 0;
+    typedef uint32_t (*GetTickFn)();
+    g_dwDirectorCamMetric2 = ((GetTickFn)0x004DB9C0)();
+    *(uint32_t*)0x00631CBC = 0;
+    *(uint32_t*)0x00631CC0 = 0;
+    g_dwDirectorCamMetric3 = g_dwDirectorCamMetric2;
+
+    typedef void (*RegisterCallbackFn)(void*);
+    ((RegisterCallbackFn)0x00469A50)((void*)0x0046A200);
 }
 
 // 0x00470300: Setup near/far clipping planes and depth ranges (0x0063148C)
 int32_t DirectorCam_SetupClipping() {
-    // Sets near clip plane and far clip plane
-    // Reconstructed from 0x00470300
+    typedef void* (*AllocBufFn)(uint32_t, uint32_t, uint32_t, uint32_t, void*, uint32_t);
+    AllocBufFn pfnAlloc = (AllocBufFn)0x004E1880;
+
+    uint32_t p1 = *(uint32_t*)0x00606E58;
+    uint32_t p2 = *(uint32_t*)0x00606E5C;
+    g_pDirectorCamClipBuffer = pfnAlloc(0x100, p1, 0x10, p2, (void*)0x0062A6B4, 0x401A3);
     return 1;
 }
 
 // 0x004677A0: Initialize camera post-processing, clear color & raster buffers (0x006314E4)
 void DirectorCam_InitPostProcess() {
-    // Initializes post-processing buffer and raster parameters
-    // Reconstructed from 0x004677A0
+    typedef uint32_t (*PostInitFn)();
+    typedef void (*SetParamFloatFn)(float);
+    typedef void (*SubFn)();
+
+    *(uint32_t*)0x00631564 = 0;
+    g_pPostProcessSlots[0] = (void*)(uintptr_t)((PostInitFn)0x004DB700)();
+    ((SubFn)0x00466BA0)();
+    ((SetParamFloatFn)0x004671E0)(0.5f);
+    ((SetParamFloatFn)0x00467500)(1.0f);
+
+    *(uint32_t*)0x00631650 = 7;
+    *(float*)0x006314CC = 1.0f;
+    *(float*)0x006314B8 = 1.0f;
+    *(float*)0x006314A4 = 1.0f;
+    *(uint32_t*)0x006314B4 = 0;
+    *(uint32_t*)0x006314AC = 0;
+    *(uint32_t*)0x006314A8 = 0;
+    *(uint32_t*)0x006314C8 = 0;
+    *(uint32_t*)0x006314C4 = 0;
+    *(uint32_t*)0x006314BC = 0;
+    *(uint32_t*)0x006314DC = 0;
+    *(uint32_t*)0x006314D8 = 0;
+    *(uint32_t*)0x006314D4 = 0;
+    g_dwPostProcessFlags |= 0x20003;
+
+    for (int i = 0; i < 256; ++i) {
+        g_postProcessIndexBuffer[i] = (uint16_t)i;
+    }
+    for (int i = 1; i < 32; ++i) {
+        g_pPostProcessSlots[i] = nullptr;
+    }
+
+    *(uint32_t*)0x0063166C = 0;
+    *(uint32_t*)0x00631658 = 0;
+    *(uint32_t*)0x0063165C = 0;
+    *(float*)0x00631660 = 1.0f;
+    *(float*)0x00631664 = 1.0f;
+    *(uint32_t*)0x00631C64 = 0;
+    *(uint32_t*)0x00631C68 = 0;
 }
 
 // 0x00467530: Calculate ViewWindow and resolution metrics for Director Camera
@@ -398,8 +571,6 @@ void DirectorCamSetup(RwCamera* pCamera) {
 
 // 0x00551410: Camera & Target Transform Solver (Called in Chunk 0x71D)
 void SolveCameraTarget() {
-    // Traverses target list linked at 0x0062FEE4 and solves target positions
-    // Reconstructed from 0x00551410
     struct CTargetNode {
         CTargetNode* pNext;            // +0x00
         CTargetNode* pPrev;            // +0x04
@@ -426,7 +597,7 @@ void SolveCameraTarget() {
     }
 }
 
-// 0x00462A50: RenderWare Camera & Raster Cleanup
+// 0x0044E850: RenderWare Camera & Raster Cleanup
 void RwDestroyCameraAndRasters(RwCamera* pCamera) {
     if (pCamera == nullptr) return;
 

@@ -50,6 +50,13 @@ struct RwV2d {
     RwReal y;
 };
 
+struct RwRect {
+    RwInt32 x;
+    RwInt32 y;
+    RwInt32 w;
+    RwInt32 h;
+};
+
 struct RwV3d {
     RwReal x;
     RwReal y;
@@ -359,7 +366,13 @@ RwCamera* RwCameraClear(RwCamera* camera, RwRGBA* colour, RwInt32 clearFlags);
 // 0x004D6000: Present/Display camera raster
 RwCamera* RwCameraShowRaster(RwCamera* camera, void* pDev, RwUInt32 flags);
 
-// 0x004E28B0: Destroy camera instance
+// 0x004D5590: Begin camera update
+RwCamera* RwCameraBeginUpdate(RwCamera* camera);
+
+// 0x004D5570: End camera update
+RwCamera* RwCameraEndUpdate(RwCamera* camera);
+
+// 0x004D59D0: Destroy camera instance
 RwBool RwCameraDestroy(RwCamera* camera);
 
 // 0x004D8D40: Create a new transformation Frame
@@ -371,8 +384,35 @@ RwFrame* RwFrameSetIdentity(RwFrame* frame);
 // 0x004E2BB0: Allocate a FrameBuffer or ZBuffer Raster
 RwRaster* RwRasterCreate(RwInt32 width, RwInt32 height, RwInt32 depth, RwInt32 flags);
 
-// 0x004D5470: Destroy raster instance
+// 0x004E28B0: Destroy raster instance
 RwBool RwRasterDestroy(RwRaster* raster);
+
+// 0x004E2910: Push raster rendering context
+RwRaster* RwRasterPushContext(RwRaster* raster);
+
+// 0x004E29E0: Pop raster rendering context
+RwRaster* RwRasterPopContext(void);
+
+// 0x004E2700: Clear active raster context
+RwRaster* RwRasterClear(RwInt32 colour);
+
+// 0x004E2790: Render raster at screen coordinates (x, y)
+RwRaster* RwRasterRender(RwRaster* raster, RwInt32 x, RwInt32 y);
+
+// 0x004E2680: Render raster scaled to destination rectangle
+RwRaster* RwRasterRenderScaled(RwRaster* raster, RwRect* rect);
+
+// 0x004E3EA0: Load image file from disk (.png, .bmp, etc.)
+RwImage* RwImageRead(const RwChar* imageName);
+
+// 0x004E4FA0: Copy image pixels into target raster
+RwRaster* RwRasterSetFromImage(RwRaster* raster, RwImage* image);
+
+// 0x004E3530: Destroy image buffer
+RwBool RwImageDestroy(RwImage* image);
+
+// 0x004E1660: Create RenderWare freelist memory pool
+void* RwFreeListCreate(RwInt32 entrySize, RwInt32 entriesPerBlock, RwInt32 alignment, RwUInt32 hint);
 
 // 0x004EFD00: Open RenderWare Stream (rwSTREAMFILENAME, rwSTREAMREAD, path)
 RwStream* RwStreamOpen(RwStreamType type, RwStreamAccessType accessType, const void* pData);

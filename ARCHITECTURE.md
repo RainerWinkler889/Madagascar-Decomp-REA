@@ -553,8 +553,10 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
      - `g_fDirectorCamViewWindowY = 2.0f * camera->viewWindow.y;` (`0x0063156C`)
 - **Kamera- & Target-Solver (`0x00551410: SolveCameraTarget`)**:
   Wird in `Chunk71D_CameraTarget` (`0x00461F40`) aufgerufen. Traversiert die doppelt verknüpfte Liste an `0x0062FEE4`, ermittelt das Zielobjekt via `0x005524A0` und führt die virtuelle Ziel-Löser-Methode an `(*pVTable)[4]` (`+0x10`) aus.
-- **Kamera- und Raster-Bereinigung (`0x00462A50: RwDestroyCameraAndRasters`)**:
-  Gibt FrameBuffer-Raster, Z-Buffer-Raster und die RenderWare Kamera geordnet frei (`RwRasterDestroy`, `RwCameraDestroy`).
+- **Splash-Screen-Renderer (`0x00462A50: DisplaySplashScreen`)**:
+  Initialisiert und rendert Vollbild-Splashscreens (Ladebildschirme, Publisher-/Developer-Logos). Lädt ein Raster via `LoadSplashImage` (`0x004628D0`), rendert es mit Front- und Back-Buffer (`RenderSplashImage` `0x004629A0`), schlägt das Raster um (`RwCameraShowRaster`) und gibt es via `UnloadSplashImage` (`0x00462970`) wieder frei.
+- **Kamera- und Raster-Bereinigung (`0x0044E850: RwDestroyCameraAndRasters`)**:
+  Gibt Z-Buffer-Raster (`zBuffer`), FrameBuffer-Raster (`frameBuffer`) und die RenderWare-Kamera geordnet frei (`RwRasterDestroy`, `RwCameraDestroy`).
 
 ---
 
@@ -643,4 +645,12 @@ Bei der statischen Analyse der RenderWare-Initialisierung wurden vier konkrete U
 - [x] Runde 7: Echte Dekompilation von Input & Controllern in [`src\input_and_camera.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.h) und [`src\input_and_camera.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.cpp) (`0x0051A070`: DirectInput_Init mit StickyKeys- und Screensaver-Management, `GameController` 0x00402600 mit 20 `INQ_*` Actions, `CXboxStndController` 0x00404E70 mit 22 TLV-Attributen).
 - [x] Runde 7: Echte Dekompilation der Direktorenkamera-Pipeline (`0x00467680`, `0x004719C0`, `0x0046F7F0`, `0x0046C1F0`, `0x00469800`, `0x00470300`, `0x004677A0`, `0x00467530`, Solver `0x00551410`, Raster-Cleanup `0x00462A50`) und Ersetzen sämtlicher roher Funktionspointer-Casts in `audio_and_frame.cpp` und `rws_core.cpp`.
 - [x] Runde 7: Strikte Verifikation mit MSVC (`cl.exe /W4 /WX /std:c++17 /EHsc`) über alle 10 `.cpp`-Dateien: **0 Fehler, 0 Warnungen** auf x86 und x64.
+- [x] Runde 8: Kritische Bugfixes & Duplikatsbeseitigung:
+  - Behebung des Kamera-Bugs in `InitPostEngineStart` (`0x00461F70`): Aufdeckung der Fehlzuordnung von `0x00462A50` (in Runde 7 fälschlich als `RwDestroyCameraAndRasters` angenommen, tatsächlich `DisplaySplashScreen(pCamera, nullptr)`). Die echte Kamera-Zerstörung ist `0x0044E850`.
+  - Bereinigung des Linker-Duplikats `CleanupInput()` (`0x0051A1A0`): Entfernung der redundanten Kopie aus [`src\system.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/system.cpp) und saubere Zusammenführung der StickyKeys-, Screensaver- und Fenster-Bereinigung in [`src\input_and_camera.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.cpp).
+- [x] Runde 8: Vollständige Ghidra-Dekompilation der 6 Direktorenkamera-Funktionen in [`src\input_and_camera.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/input_and_camera.cpp) (`0x004719C0`, `0x0046F7F0`, `0x0046C1F0`, `0x00469800`, `0x00470300`, `0x004677A0`) mit echten Speicherzugriffen auf `0x00631464..0x0063163C` und statischen Puffern.
+- [x] Runde 8: Echter RWS TLV-Stream-Deserializer in `CXboxStndController::DeserializeStream` (`0x00404E70`): Ersetzung der Mock-Schleife durch die kanonische TLV-Attribut-Schleife (`0x0054FE20`, `0x0054FDF0`, `0x0054FEC0`, `0x0054FEA0`) für alle 22 Controller-Attribute.
+- [x] Runde 8: Vollständige Rekonstruktion aller 8 `HAnimSub_*`-Skelett-/Animations-Subfunktionen (`0x00426550`, `0x0043CCA0`, `0x0044DC30`, `0x00419380`, `0x0043C9B0`, `0x0042B150`, `0x00450490`, `0x00464E20`) und des Action-Callbacks `0x0043D340` (`ECProtoActor::ActionCallback`) in [`src\player_and_actors.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.cpp).
+- [x] Runde 8: Dekompilation des Splash-Screen-Renderers (`LoadSplashImage` `0x004628D0`, `RenderSplashImage` `0x004629A0`, `UnloadSplashImage` `0x00462970`, `DisplaySplashScreen` `0x00462A50`) in [`src\audio_and_frame.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.cpp) sowie der RWS-Initialisierer (`RWS_InitCollisionSector` `0x0044AE80`, `RWS_InitEventSystem` `0x005509E0`, `RWS_RegisterCameraTargetChunk` `0x005535F0`, `RWS_RegisterSplineChunk` `0x00551980`, `RenderLoadingProgressBar` `0x00460DA0`) in [`src\rws_core.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/rws_core.cpp).
+- [x] Runde 8: Strikte Verifikation mit MSVC (`cl.exe /std:c++17 /W4 /WX /EHsc`): **0 Fehler, 0 Warnungen** über alle 10 `.cpp`-Dateien.
 

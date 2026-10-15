@@ -105,3 +105,18 @@ void RegisterRWSMessage(void** ppMsgOut, const char* msgName, uint32_t priority)
 
 // 0x00550BB0: Broadcast RWS Message to registered listeners
 void BroadcastRWSMessage(void** ppMsg);
+
+// 0x0044AE80: Collision sector initialization
+void RWS_InitCollisionSector();
+
+// 0x005509E0: Event system and deletion message initialization
+void RWS_InitEventSystem(int param1, int param2);
+
+// 0x005535F0: Register RWS Camera Target Chunk 0x712
+void RWS_RegisterCameraTargetChunk();
+
+// 0x00551980: Register RWS Spline Chunk 0x71C
+void RWS_RegisterSplineChunk();
+
+// 0x00460DA0: Render loading progress bar / paw prints during stream load
+void RenderLoadingProgressBar();

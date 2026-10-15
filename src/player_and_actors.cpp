@@ -256,9 +256,34 @@ int32_t ECProtoActor::StatusNoOp(int32_t p1, int32_t p2) {
 
 // Slot 16: 0x00402BC0: Action Callback (0x0043D340)
 void ECProtoActor::ActionCallback(void* pTarget, char flag) {
-    (void)pTarget;
-    (void)flag;
-    // 0x0043D340: Action callback iteration and randomized state transition
+    if (pTarget != (void*)this && pTarget != nullptr) {
+        HAnimSub_UpdateNodeList();
+
+        int32_t* target = (int32_t*)pTarget;
+        typedef int32_t (*VTableSlot4Fn)(void*);
+        VTableSlot4Fn pfnSlot4 = (VTableSlot4Fn)(*(void**)(*target + 0x10));
+        int32_t targetState = pfnSlot4 ? pfnSlot4(target) : 0;
+
+        typedef int32_t (*QueryStateFn)();
+        int32_t currentState = ((QueryStateFn)0x0043D2D0)();
+
+        if (targetState != currentState) {
+            typedef void (*ApplyStateFn)(void*, float);
+            ((ApplyStateFn)0x0043CA30)(target, 3.4028235e+38f);
+            return;
+        }
+
+        if (flag == '\0') {
+            typedef void (*StateSubFn)();
+            ((StateSubFn)0x0043CBF0)();
+        }
+
+        for (int32_t iVar2 = target[4]; iVar2 != 0; iVar2 = *(int32_t*)(iVar2 + 4)) {
+            float val = (flag == '\0') ? 3.4028235e+38f : (float)rand();
+            typedef void (*ApplySubFn)(int32_t, float);
+            ((ApplySubFn)0x0043CA30)(*(int32_t*)(iVar2 + 0x0C), val);
+        }
+    }
 }
 
 // Slot 17: 0x0042CDA0: State Transition
@@ -400,45 +425,171 @@ void CItemManager::ResetLevelCollectibles() {
 // 3. Hierarchical Animation (HAnim) Subfunctions (0x00428270)
 // ============================================================================
 
+// Global state in Game.exe .data for skeletal & anim updates
+static uint32_t s_dwAnimInitGuard = 0;      // 0x00618364
+static uint32_t s_dwAnimSubState  = 0;      // 0x00618350
+static void*    s_pAnimSubVTable  = nullptr;// 0x0061834C
+
 // 0x00426550: HAnimSub_TickAnimations
 void HAnimSub_TickAnimations() {
-    // Checks animation tick state at 0x00618364 and advances timeline
+    if ((s_dwAnimInitGuard & 1) == 0) {
+        s_dwAnimInitGuard |= 1;
+        s_dwAnimSubState = 1;
+        s_pAnimSubVTable = (void*)0x005CA608;
+        *(uint32_t*)0x00618354 = 0;
+        *(uint32_t*)0x00618358 = 0;
+        *(uint32_t*)0x0061835C = 0;
+        *(uint32_t*)0x00618360 = 0;
+    }
 }
 
 // 0x0043CCA0: HAnimSub_UpdateNodeList
 void HAnimSub_UpdateNodeList() {
-    // Updates skeletal node list and advances active anim sequences
+    ECProtoActor* pActor = GetActivePlayerActor();
+    if (pActor == nullptr) return;
+
+    uint8_t* pRaw = (uint8_t*)pActor;
+    int32_t node = *(int32_t*)(pRaw + 0x10);
+    *(int32_t*)(pRaw + 0x14) = node;
+
+    while (node != 0) {
+        int32_t curr = *(int32_t*)(pRaw + 0x14);
+        int32_t next = *(int32_t*)(*(int32_t*)(pRaw + 0x10) + 4);
+        *(int32_t*)(pRaw + 0x10) = next;
+        if (curr != 0) {
+            typedef void (*NodeStepFn)(int32_t);
+            int32_t* pObj = *(int32_t**)(curr + 0x0C);
+            if (pObj != nullptr) {
+                NodeStepFn pfnStep = *(NodeStepFn*)(*pObj + 8);
+                if (pfnStep != nullptr) {
+                    pfnStep(0xFFFFFFFF);
+                }
+            }
+            break;
+        }
+        node = *(int32_t*)(pRaw + 0x10);
+        *(int32_t*)(pRaw + 0x14) = node;
+    }
+
+    *(uint32_t*)(pRaw + 8) = 0;
+    *(uint8_t*)(pRaw + 4) = 1;
+    *(int32_t*)(pRaw + 0x0C) += 1;
 }
 
 // 0x0044DC30: HAnimSub_ResetBonePalettes
 void HAnimSub_ResetBonePalettes() {
-    // Resets bone palette transform pointers at 0x0062971C and 0x00629714
+    typedef void (*ResetHelperFn)(int);
+    ((ResetHelperFn)0x0044D8B0)(0);
+
+    *(void**)0x0062971C = (void*)0x0062971C;
+    *(void**)0x00629720 = (void*)0x0062971C;
+    *(void**)0x00629714 = (void*)0x00629714;
+    *(void**)0x00629718 = (void*)0x00629714;
+
+    uintptr_t pending = *(uintptr_t*)0x006296EC;
+    if (pending != 0) {
+        typedef void (*CleanupFn)(uintptr_t);
+        ((CleanupFn)0x0044DA10)(pending);
+    }
+
+    *(float*)0x00629710 = 15.0f;     // 0x41700000: Near plane
+    *(float*)0x0062970C = 20000.0f;  // 0x469C4000: Far plane
+    *(uint32_t*)0x00629700 = 1;
+    *(uint32_t*)0x00629704 = 0;
+    *(uint32_t*)0x006296FC = 0;
+    *(uint32_t*)0x00629708 = 0;
+    *(uint32_t*)0x006221B0 = 0;
 }
 
 // 0x00419380: HAnimSub_UpdateAudioVoices
 void HAnimSub_UpdateAudioVoices() {
-    // Iterates active actor audio voices linked at 0x00617FD0
+    uint32_t** ppVoiceHead = (uint32_t**)0x00617FD0;
+    if (ppVoiceHead != nullptr && *ppVoiceHead != nullptr) {
+        uint32_t* pCur = *ppVoiceHead;
+        *(uint32_t**)0x00617FD0 = (uint32_t*)*pCur;
+        typedef void (*VoiceTickFn)();
+        ((VoiceTickFn)0x00418E10)();
+    }
 }
 
 // 0x0043C9B0: HAnimSub_UpdateWorldHierarchies
 void HAnimSub_UpdateWorldHierarchies(int32_t activeWorldCount) {
-    // Updates world hierarchies for all active worlds (DAT_00602EA0)
-    (void)activeWorldCount;
+    typedef void* (*GetWorldVecFn)();
+    void* pVec = ((GetWorldVecFn)0x0043C810)();
+    int32_t count = 0;
+    if (pVec != nullptr && *(uint8_t**)((uint8_t*)pVec + 4) != nullptr) {
+        count = (*(int32_t*)((uint8_t*)pVec + 8) - *(int32_t*)((uint8_t*)pVec + 4)) >> 2;
+    }
+
+    for (int32_t i = 0; i < count; ++i) {
+        int32_t** ppItems = *(int32_t***)((uint8_t*)pVec + 4);
+        if (ppItems != nullptr && ppItems[i] != nullptr) {
+            typedef void (*WorldTickFn)();
+            WorldTickFn pfnTick = (WorldTickFn)(*(void**)(*ppItems[i] + 0x28));
+            if (pfnTick != nullptr) {
+                pfnTick();
+            }
+        }
+    }
+
+    if (activeWorldCount == -1) {
+        activeWorldCount = *(int32_t*)0x00621F24;
+    }
+    typedef void (*WorldSelectFn)(int32_t);
+    ((WorldSelectFn)0x00433EC0)(activeWorldCount);
+
+    typedef void* (*GetHierarchyBufFn)();
+    void* pBuf = ((GetHierarchyBufFn)0x0042F3F0)();
+    if (pBuf != nullptr) {
+        uint32_t size = *(uint32_t*)((uint8_t*)pBuf + 0x24);
+        void* pData = *(void**)((uint8_t*)pBuf + 0x1C);
+        if (pData != nullptr && size > 0) {
+            memset(pData, 0, size);
+        }
+    }
 }
 
 // 0x0042B150: HAnimSub_UpdateBoneTransforms
 void HAnimSub_UpdateBoneTransforms() {
-    // Traverses bone node list at 0x00618378 and applies joint rotations
+    uint32_t count = *(uint32_t*)0x00618378;
+    for (uint32_t i = 0; i < count; ++i) {
+        typedef void (*BoneTickFn)();
+        ((BoneTickFn)0x00432BC0)();
+    }
+    *(uint32_t*)0x00618378 = 0;
 }
 
 // 0x00450490: HAnimSub_UpdateModelPalettes
 void HAnimSub_UpdateModelPalettes() {
-    // Updates model skinning matrix palettes at 0x00629F1C
+    int32_t count = *(int32_t*)0x00629F1C;
+    if (count > 0) {
+        int32_t* pEntry = (int32_t*)0x00629E64;
+        for (int32_t i = 0; i < count; ++i) {
+            if (*pEntry != 0) {
+                typedef void (*PaletteFreeFn)(int32_t);
+                ((PaletteFreeFn)0x0046A0B0)(*pEntry);
+                pEntry[-1] = 0;
+                *pEntry = 0;
+                pEntry[1] = 0;
+            }
+            pEntry += 3;
+        }
+    }
+    *(int32_t*)0x00629F1C = 0;
 }
 
 // 0x00464E20: HAnimSub_DispatchAnimEvents
 void HAnimSub_DispatchAnimEvents() {
-    // Dispatches triggered animation cue events at 0x0062A604
+    int32_t** ppEventRoot = (int32_t**)0x0062A604;
+    if (ppEventRoot == nullptr || *ppEventRoot == nullptr) return;
+
+    int32_t* pEvent = (int32_t*)**ppEventRoot;
+    if (pEvent != nullptr) {
+        if (*(int32_t*)((uint8_t*)pEvent + 0x204) != 0) {
+            typedef void (*DispatchEventFn)(int);
+            ((DispatchEventFn)0x00464CD0)(1);
+        }
+    }
 }
 
 // 0x00428270: Master Hierarchical Animation (HAnim) & Skeleton bone updates

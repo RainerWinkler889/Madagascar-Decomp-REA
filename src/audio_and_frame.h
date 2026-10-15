@@ -108,3 +108,19 @@ void Chunk700_WorldSetup(void* pChunkHeader);
 // 0x00461F40: RWS Chunk 0x71D Handler (Camera Target)
 void Chunk71D_CameraTarget(void* pChunkHeader);
 
+// ============================================================================
+// 3. Splash Screen Pipeline (0x004628D0 .. 0x00462A50)
+// ============================================================================
+
+// 0x004628D0: Load splash texture / image from Images directory
+bool LoadSplashImage(const char* imageName);
+
+// 0x004629A0: Render active splash image to camera framebuffer
+void RenderSplashImage(RwCamera* pCamera);
+
+// 0x00462970: Unload and destroy active splash raster
+void UnloadSplashImage();
+
+// 0x00462A50: Master splash screen presenter (loads image, draws 2 frames, unloads)
+void DisplaySplashScreen(RwCamera* pCamera, const char* splashName);
+

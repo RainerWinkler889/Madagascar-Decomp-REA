@@ -483,14 +483,12 @@ char CheckStateChangeRequest() {
     }
 
     // Render splash screen raster
-    typedef void (*LoadImageFn)(const char*);
-    typedef void (*RenderSplashFn)(RwCamera*);
-    ((LoadImageFn)0x004628D0)(splashImage);
+    LoadSplashImage(splashImage);
 
     if (pCamera != nullptr) {
-        ((RenderSplashFn)0x004629A0)(pCamera);
+        RenderSplashImage(pCamera);
         ClearCamera(pCamera, nullptr, rwCAMERACLEARIMAGE);
-        ((RenderSplashFn)0x004629A0)(pCamera);
+        RenderSplashImage(pCamera);
         ClearCamera(pCamera, nullptr, rwCAMERACLEARIMAGE);
     }
 
@@ -503,8 +501,7 @@ char CheckStateChangeRequest() {
     s_nLevelTransPending2 = 0;
 
     // Reset splash screen
-    typedef void (*UnloadSplashFn)();
-    ((UnloadSplashFn)0x00462970)();
+    UnloadSplashImage();
 
     if (bOk && s_nActiveLevelID == 0 && s_nTargetLevelID == 0x10 && s_nStartupState == 0) {
         typedef int32_t (*PlayBgmFn)(const char*);
@@ -591,5 +588,78 @@ void Chunk71D_CameraTarget(void* pChunkHeader) {
     DispatchRWSMessages(&g_pRWSMessageQueueHead);
     SolveCameraTarget(); // 0x00551410: Clean camera & target transform solver call
     UpdateHAnimSkeletons();
+}
+
+// ============================================================================
+// 3. Splash Screen Pipeline (0x004628D0 .. 0x00462A50)
+// ============================================================================
+
+RwRaster* g_pSplashRaster = nullptr; // 0x0062A57C
+
+// 0x004628D0: Load splash texture / image from Images directory
+bool LoadSplashImage(const char* imageName) {
+    if (imageName != nullptr && imageName[0] != '\0') {
+        char localPath[256];
+        RwImage* pImage = RwImageRead(imageName);
+        if (pImage == nullptr) {
+            snprintf(localPath, sizeof(localPath), "Images\\%s", imageName);
+            pImage = RwImageRead(localPath);
+        }
+        if (pImage != nullptr) {
+            RwRaster* pRaster = RwRasterCreate(pImage->width, pImage->height, pImage->depth, rwRASTERTYPETEXTURE);
+            if (pRaster != nullptr) {
+                RwRasterSetFromImage(pRaster, pImage);
+            }
+            RwImageDestroy(pImage);
+            g_pSplashRaster = pRaster;
+            return true;
+        }
+    }
+    g_pSplashRaster = nullptr;
+    return true;
+}
+
+// 0x004629A0: Render active splash image to camera framebuffer
+void RenderSplashImage(RwCamera* pCamera) {
+    if (pCamera == nullptr || pCamera->frameBuffer == nullptr) return;
+
+    RwRasterPushContext(pCamera->frameBuffer); // 0x004E2910
+
+    if (g_pSplashRaster == nullptr) {
+        RwRasterClear(0);                      // 0x004E2700
+        RwRasterPopContext();                  // 0x004E29E0
+        return;
+    }
+
+    if (pCamera->frameBuffer->width == g_pSplashRaster->width &&
+        pCamera->frameBuffer->height == g_pSplashRaster->height) {
+        RwRasterClear(0);                      // 0x004E2700
+        RwRasterRender(g_pSplashRaster, 0, 0); // 0x004E2790
+        RwRasterPopContext();                  // 0x004E29E0
+        return;
+    }
+
+    RwRect rect = { 0, 0, pCamera->frameBuffer->width, pCamera->frameBuffer->height };
+    RwRasterRenderScaled(g_pSplashRaster, &rect); // 0x004E2680
+    RwRasterPopContext();                  // 0x004E29E0
+}
+
+// 0x00462970: Unload and destroy active splash raster
+void UnloadSplashImage() {
+    if (g_pSplashRaster != nullptr) {
+        RwRasterDestroy(g_pSplashRaster); // 0x004E28B0
+        g_pSplashRaster = nullptr;
+    }
+    RwTextureSetMipmapping(RWFALSE);      // 0x004E1FA0
+}
+
+// 0x00462A50: Master splash screen presenter (loads image, draws 2 frames, unloads)
+void DisplaySplashScreen(RwCamera* pCamera, const char* splashName) {
+    if (LoadSplashImage(splashName)) {
+        for (int i = 0; i < 2; ++i) {
+            RenderSplashImage(pCamera);
+        }
+        UnloadSplashImage();
+    }
 }
 

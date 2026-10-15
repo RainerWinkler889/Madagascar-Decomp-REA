@@ -34,7 +34,7 @@
  *  - 0x00467530: DirectorCam_UpdateMetrics (ViewWindow & raster resolution at 0x00631568..0x00631574)
  *  - 0x004676A0: DirectorCamSetup (Director camera pipeline orchestration)
  *  - 0x00551410: SolveCameraTarget (Camera target solver called in Chunk 0x71D)
- *  - 0x00462A50: RwDestroyCameraAndRasters (Camera & raster resource cleanup)
+ *  - 0x0044E850: RwDestroyCameraAndRasters (Camera & raster resource cleanup)
  */
 
 #pragma once
@@ -216,7 +216,7 @@ void DirectorCamSetup(RwCamera* pCamera);
 // 0x00551410: Camera & Target Transform Solver (Called in Chunk 0x71D)
 void SolveCameraTarget();
 
-// 0x00462A50: RenderWare Camera & Raster Cleanup
+// 0x0044E850: RenderWare Camera & Raster Cleanup
 void RwDestroyCameraAndRasters(RwCamera* pCamera);
 
 // Global Director Camera State Variables in Game.exe .data

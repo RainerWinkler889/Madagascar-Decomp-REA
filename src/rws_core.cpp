@@ -247,6 +247,78 @@ void UpdateRWSEntities() {
 }
 
 // ============================================================================
+// RWS Framework Initializers & Loading Hook (0x0044AE80, 0x005509E0, 0x005535F0, 0x00551980, 0x00460DA0)
+// ============================================================================
+
+// 0x0044AE80: Collision sector initialization
+static int32_t s_nCollisionSectorInitCount = 0; // 0x00629698
+
+void RWS_InitCollisionSector() {
+    if (s_nCollisionSectorInitCount == 0) {
+        typedef int32_t (*InitHelperFn)();
+        typedef void (*InitSubFn)();
+        if (((InitHelperFn)0x0044AD50)()) {
+            ((InitSubFn)0x0044ABE0)();
+            ((InitSubFn)0x0044ACF0)();
+        }
+    }
+    s_nCollisionSectorInitCount++;
+}
+
+// 0x005509E0: Event system and deletion message initialization
+void* g_pEventHandlerFreeList = nullptr; // 0x0062FEB4
+void* g_pEntityFreeList = nullptr;       // 0x0062FEB8
+void* g_pMsgDeleteEventHandler = nullptr; // 0x0062FEC8
+void* g_pMsgDeleteEntity = nullptr;       // 0x0062FED0
+void* g_pMsgOnDeleteEntity = nullptr;     // 0x0062FED8
+
+void RWS_InitEventSystem(int param1, int param2) {
+    if (param1 == 0) param1 = 20; // 0x14
+    g_pEventHandlerFreeList = RwFreeListCreate(0x14, param1, 0x10, 0x40000);
+    if (param2 == 0) param2 = 10;
+    g_pEntityFreeList = RwFreeListCreate(0x38, param2, 0x10, 0x40000);
+
+    RegisterRWSMessage(&g_pMsgDeleteEventHandler, "iMsgDeleteEventHandler", 0);
+    RegisterRWSMessage(&g_pMsgDeleteEntity,       "iMsgDeleteEntity",       0);
+    RegisterRWSMessage(&g_pMsgOnDeleteEntity,     "iMsgOnDeleteEntity",     (uint32_t)(uintptr_t)"CEventHandler*");
+}
+
+// 0x005535F0: Register RWS Camera Target Chunk 0x712
+void RWS_RegisterCameraTargetChunk() {
+    RegisterRWSChunkHandler(0x712, (RWSChunkHandlerFn)0x00553530);
+}
+
+// 0x00551980: Register RWS Spline Chunk 0x71C
+void RWS_RegisterSplineChunk() {
+    RegisterRWSChunkHandler(0x71C, (RWSChunkHandlerFn)0x005518D0);
+}
+
+// 0x00460DA0: Render loading progress bar / paw prints during stream load
+uint32_t g_dwLoadingTotalBytes = 0; // 0x0062A1E4
+uint32_t g_dwLoadingStartTime  = 0; // 0x0062A1E0
+uint32_t g_dwLoadingLastTick   = 0; // 0x0062A308
+
+void RenderLoadingProgressBar() {
+    if (g_dwLoadingTotalBytes == 0) return;
+
+    uint32_t curTime = (uint32_t)CTimer::GetTimeTicks();
+    if ((curTime - g_dwLoadingLastTick <= 99) && (g_dwLoadingStartTime != 0)) {
+        return;
+    }
+    g_dwLoadingLastTick = curTime;
+
+    RwCamera* pCamera = GetActiveCamera();
+    if (pCamera == nullptr) return;
+
+    RenderSplashImage(pCamera);
+
+    if (RwCameraBeginUpdate(pCamera)) {
+        RwCameraEndUpdate(pCamera);
+        RwCameraShowRaster(pCamera, nullptr, 1);
+    }
+}
+
+// ============================================================================
 // 0x00552F70: ProcessRWSStream
 //
 // Master deserialization loop for `.stream` files:
@@ -265,7 +337,6 @@ uint8_t ProcessRWSStream(RwStream* pStream) {
 
     typedef RwStream* (*RwStreamReadChunkHeaderInfoFn)(RwStream*, RwChunkHeaderInfo*);
     typedef RwStream* (*RwStreamSkipFn)(RwStream*, uint32_t);
-    typedef void (*PostChunkHookFn)();
 
     RwChunkHeaderInfo chunkHeader;
 
@@ -286,8 +357,8 @@ uint8_t ProcessRWSStream(RwStream* pStream) {
             ((RwStreamSkipFn)0x004EFA90)(pStream, chunkHeader.length);
         }
 
-        // Post-chunk notification hook (0x00460DA0)
-        ((PostChunkHookFn)0x00460DA0)();
+        // Post-chunk notification hook & progress renderer (0x00460DA0)
+        RenderLoadingProgressBar();
     }
 
     return 1;
@@ -310,18 +381,14 @@ void InitPostEngineStart(uint32_t width, uint32_t height, uint32_t depth) {
 
     // 3. Direktorenkamera & erweiterte Setups
     DirectorCamSetup(pCamera);
-    // 0x00462A50: Clean camera & raster cleanup call
-    RwDestroyCameraAndRasters(pCamera);
+    // 0x00462A50: Display initial splash screen / clear frame buffers (never destroys camera!)
+    DisplaySplashScreen(pCamera, nullptr);
 
     // 4. RWS Framework Initialisierungen
-    typedef void (*RWSInitFn)();
-    ((RWSInitFn)0x0044AE80)();
-    
-    typedef void (*RWSSetupFn)(int, int);
-    ((RWSSetupFn)0x005509E0)(0, 0);
-
-    ((RWSInitFn)0x005535F0)();
-    ((RWSInitFn)0x00551980)();
+    RWS_InitCollisionSector();      // 0x0044AE80
+    RWS_InitEventSystem(0, 0);      // 0x005509E0
+    RWS_RegisterCameraTargetChunk();// 0x005535F0
+    RWS_RegisterSplineChunk();       // 0x00551980
 
     // 5. System Messages registrieren
     RegisterRWSMessage(&g_pMsgStartSystem, "iMsgStartSystem", 0); // 0x00550440
