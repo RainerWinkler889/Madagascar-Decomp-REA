@@ -18,6 +18,7 @@
 
 #include "tfb_entities.h"
 #include "script_and_ui.h"
+#include "audio_and_frame.h"
 #include <cstring>
 
 // ============================================================================
@@ -507,8 +508,7 @@ void CTFBSound::StreamRead(void* pStream) {
             }
 
             case 16: { // Audio Channel Group / Bank
-                typedef void* (*GetBankFn)(uint32_t);
-                m_pSoundBank = ((GetBankFn)0x0044F580)(*(uint32_t*)pRaw);
+                m_pSoundBank = GetSoundBank(*(uint32_t*)pRaw);
                 break;
             }
 
@@ -525,22 +525,19 @@ void CTFBSound::StreamRead(void* pStream) {
         m_dwSoundNameHash = HashString(szSoundFile); // 0x00464D00
 
         // Open audio stream handle
-        typedef void* (*OpenAudioStreamFn)(uint32_t);
-        m_pStreamHandle = ((OpenAudioStreamFn)0x0044AFB0)(m_dwSoundNameHash);
+        m_pStreamHandle = OpenAudioStream(m_dwSoundNameHash);
         m_bLoaded = 1;
     }
 }
 
 void CTFBSound::Play() {
     if (!m_bLoaded || m_pStreamHandle == nullptr) return;
-    typedef void (*PlaySoundStreamFn)(void*, float, bool);
-    ((PlaySoundStreamFn)0x0044B200)(m_pStreamHandle, m_fVolume, m_bLooped);
+    PlaySoundStream(m_pStreamHandle, m_fVolume, m_bLooped);
 }
 
 void CTFBSound::Stop() {
     if (m_pStreamHandle != nullptr) {
-        typedef void (*StopSoundStreamFn)(void*);
-        ((StopSoundStreamFn)0x0044B250)(m_pStreamHandle);
+        StopSoundStream(m_pStreamHandle);
     }
 }
 
@@ -549,15 +546,13 @@ void CTFBSound::SetVolume(float volume) {
     if (volume > 1.0f) volume = 1.0f;
     m_fVolume = volume;
     if (m_pStreamHandle != nullptr) {
-        typedef void (*SetVolumeFn)(void*, float);
-        ((SetVolumeFn)0x0044B2A0)(m_pStreamHandle, m_fVolume);
+        SetSoundVolume(m_pStreamHandle, m_fVolume);
     }
 }
 
 void CTFBSound::Set3DPosition(const RwV3d* pPos) {
     if (pPos != nullptr && m_pStreamHandle != nullptr) {
-        typedef void (*SetPosFn)(void*, const RwV3d*);
-        ((SetPosFn)0x0044B300)(m_pStreamHandle, pPos);
+        SetSound3DPosition(m_pStreamHandle, pPos);
     }
 }
 

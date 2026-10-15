@@ -20,6 +20,7 @@
 
 #include "rws_core.h"
 #include "script_and_ui.h"
+#include "audio_and_frame.h"
 
 // ============================================================================
 // Global State Variables in Game.exe .data
@@ -46,9 +47,6 @@ void* g_pMsgStopSystem = nullptr; // 0x0062A518
 // Internal RWS chunk handler dispatch registry (0x00552E70)
 static std::map<uint32_t, RWSChunkHandlerFn> s_chunkHandlers;
 
-// Active camera handle in Game.exe
-static RwCamera* s_pActiveCamera = nullptr; // 0x0062F130
-
 // Time accumulator variables
 static uint32_t s_dwTimeAccum1 = 0; // 0x0062A380
 static uint32_t s_dwTimeAccum2 = 0; // 0x0062A384
@@ -58,29 +56,9 @@ static uint32_t s_dwTimeAccum3 = 0; // 0x0062A388
 // Internal Engine Helper Stubs / Imports
 // ============================================================================
 
-// 0x00462670: Store active camera
-static void SetActiveCamera(RwCamera* camera) {
-    s_pActiveCamera = camera;
-    typedef void (*SetActiveCameraFn)(RwCamera*);
-    ((SetActiveCameraFn)0x00462670)(camera);
-}
-
-// 0x00462660: Get active camera
-static RwCamera* GetActiveCamera() {
-    typedef RwCamera* (*GetActiveCameraFn)();
-    return ((GetActiveCameraFn)0x00462660)();
-}
-
-// 0x00462720: Present camera raster (ShowRaster)
-static void PresentRaster() {
-    typedef void (*PresentCameraRasterFn)();
-    ((PresentCameraRasterFn)0x00462720)();
-}
-
 // 0x004D5810: RenderWare Camera Clear
 static void ClearCamera(RwCamera* camera, RwRGBA* color, int32_t clearFlags) {
-    typedef void (*RwCameraClearFn)(RwCamera*, RwRGBA*, int32_t);
-    ((RwCameraClearFn)0x004D5810)(camera, color, clearFlags);
+    RwCameraClear(camera, color, clearFlags); // 0x004D5810
 }
 
 // ============================================================================
@@ -330,8 +308,7 @@ void InitPostEngineStart(uint32_t width, uint32_t height, uint32_t depth) {
     SetActiveCamera(pCamera); // 0x00462670
 
     // 3. Direktorenkamera & erweiterte Setups
-    typedef void (*DirectorCamSetupFn)(RwCamera*);
-    ((DirectorCamSetupFn)0x004676A0)(pCamera);
+    DirectorCamSetup(pCamera);
 
     typedef void (*CameraSubsystemFn)(RwCamera*);
     ((CameraSubsystemFn)0x00462A50)(pCamera);
@@ -353,20 +330,19 @@ void InitPostEngineStart(uint32_t width, uint32_t height, uint32_t depth) {
     // 6. Double-Buffer Clear (Clear front buffer and back buffer)
     RwRGBA blackColor = { 0, 0, 0, 255 };
     ClearCamera(pCamera, &blackColor, 3); // 0x004D5810 (rwCAMERACLEARZ | rwCAMERACLEARIMAGE)
-    PresentRaster();                      // 0x00462720
+    PresentCameraRaster();                // 0x00462720
 
     ClearCamera(pCamera, &blackColor, 3); // 0x004D5810
-    PresentRaster();                      // 0x00462720
+    PresentCameraRaster();                // 0x00462720
 
     // 7. Standard RWS Chunk Handlers registrieren (0x00552F00)
     RegisterRWSChunkHandler(rwsID_CHUNK_MODE_CHANGE,   (RWSChunkHandlerFn)BroadcastModeChange);  // 0x70b
     RegisterRWSChunkHandler(rwsID_CHUNK_RUNNING_TICK,  (RWSChunkHandlerFn)BroadcastRunningTick); // 0x70c
-    RegisterRWSChunkHandler(rwsID_CHUNK_WORLD_SETUP,   (RWSChunkHandlerFn)0x00461F10);          // 0x700
-    RegisterRWSChunkHandler(rwsID_CHUNK_CAMERA_TARGET, (RWSChunkHandlerFn)0x00461F40);          // 0x71d
+    RegisterRWSChunkHandler(rwsID_CHUNK_WORLD_SETUP,   (RWSChunkHandlerFn)Chunk700_WorldSetup);  // 0x700
+    RegisterRWSChunkHandler(rwsID_CHUNK_CAMERA_TARGET, (RWSChunkHandlerFn)Chunk71D_CameraTarget);// 0x71d
 
     // 8. Sound & UI Initialisierungen
-    typedef void (*SoundInitHookFn)();
-    ((SoundInitHookFn)0x00451470)();
+    SoundInitHook();
 
     (void)pCamera;
     InitUISubsystem();

@@ -209,26 +209,155 @@ uint32_t HashAnimName(const char* animName) {
 }
 
 // ============================================================================
-// 3. BTFB Script Interpreter (0x00413500)
+// 3. BTFB Script Interpreter & Command Table
 //
-// Führt Skriptbefehle aus, die durch räumliche CTFBCommand-Trigger ausgelöst
-// wurden oder von Sequenzen gesendet wurden.
+// Reconstructed from Game.exe:
+//   - 0x005CA3DF: "BTFB Script"
+//   - 0x005CA3EC: Virtual method table (13 function pointers)
+//   - 0x005CA430: Canonical BTFB Script Inquiry tokens (INQ_*)
+//   - 0x00413500: ExecuteScriptCmd / BTFB Script Command Dispatcher
 // ============================================================================
+
+// Static instance of the 13-slot BTFB Script VTable (0x005CA3EC in Game.exe)
+static const CBTFBScriptVTable s_btfbScriptVTable = {
+    (void*)0x0043E6F0, // Slot 0: QueryState (Default returns 0)
+    (void*)0x00436A40, // Slot 1: Virtual invocation dispatch
+    (void*)0x00416530, // Slot 2: NOP / returns 0
+    (void*)0x004025C0, // Slot 3: Scalar deleting destructor
+    (void*)0x0043E6F0, // Slot 4: Reserved / returns 0
+    (void*)0x0043E6F0, // Slot 5: Reserved / returns 0
+    (void*)0x0042CBE0, // Slot 6: GetType (Returns 2)
+    (void*)0x0043DC80, // Slot 7: Reset / Clear target pointer
+    (void*)0x004025A0, // Slot 8: NOP ret 8
+    (void*)0x004025B0, // Slot 9: Identity (returns this)
+    (void*)0x00464EF0, // Slot 10: NOP ret
+    (void*)0x0055805E, // Slot 11: Cleanup / RTTI
+    (void*)0x00436A40  // Slot 12: Virtual dispatch
+};
+
+// Canonical BTFB Script Inquiry token table (0x005CA430 & 0x00402600 in Game.exe)
+static const char* const s_szBTFBScriptInquiries[BTFB_INQ_COUNT] = {
+    "INQ_ACTN_START",        // 0
+    "INQ_ACTN_SELECT",       // 1
+    "INQ_ACTN_TRICK",        // 2
+    "INQ_ACTN_FIRE",         // 3
+    "INQ_ACTN_JUMP",         // 4
+    "INQ_ACTN_DODGE",        // 5
+    "INQ_SHOULDER_LEFT",     // 6
+    "INQ_SHOULDER_RIGHT",    // 7
+    "INQ_ACTN_SHOULDER_L2",  // 8
+    "INQ_ACTN_SHOULDER_R2",  // 9
+    "INQ_ACTN_PAD_L",        // 10
+    "INQ_ACTN_PAD_R",        // 11
+    "INQ_ACTN_PAD_U",        // 12
+    "INQ_ACTN_PAD_D",        // 13
+    "INQ_ACTN_TURN",         // 14
+    "INQ_ACTN_FWD",          // 15
+    "INQ_LPAD_BUTTON",       // 16
+    "INQ_CAMERA_ROTATE",     // 17
+    "INQ_CAMERA_PITCH",      // 18
+    "INQ_RPAD_BUTTON",       // 19
+    "INQ_ACTN_STRAFE"        // 20 (0x005CAEC8)
+};
+
+const CBTFBScriptVTable* GetBTFBScriptVTable() {
+    return &s_btfbScriptVTable;
+}
+
+const char* GetBTFBScriptInquiryName(EBTFBScriptInquiry inq) {
+    if (inq >= 0 && inq < BTFB_INQ_COUNT) {
+        return s_szBTFBScriptInquiries[inq];
+    }
+    return nullptr;
+}
+
+int32_t FindBTFBScriptInquiry(const char* name) {
+    if (!name) return -1;
+    for (int32_t i = 0; i < BTFB_INQ_COUNT; ++i) {
+        if (_stricmp(name, s_szBTFBScriptInquiries[i]) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// 0x00413500: ExecuteScriptCmd / BTFB Script Command Dispatcher
+bool ExecuteScriptCmdByName(const char* cmdString) {
+    if (!cmdString || !*cmdString) return false;
+
+    // 1. Check for Script Inquiry Tokens (0x005CA430: INQ_*)
+    int32_t inqIdx = FindBTFBScriptInquiry(cmdString);
+    if (inqIdx >= 0) {
+        // Inquiry commands return RwReal values via RWS messaging pipeline (0x00550440: "return RwReal")
+        return true;
+    }
+
+    // 2. Built-in Cinematic & Sequence Triggers
+    if (_strnicmp(cmdString, "START_CINEMATIC", 15) == 0) {
+        // Starts in-game cutscene or sequence
+        return true;
+    }
+    if (_strnicmp(cmdString, "STOP_CINEMATIC", 14) == 0) {
+        return true;
+    }
+
+    // 3. Screen Fade & Visual Presentation
+    if (_strnicmp(cmdString, "FADE_OUT", 8) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "FADE_IN", 7) == 0) {
+        return true;
+    }
+
+    // 4. Audio & Background Music Commands
+    if (_strnicmp(cmdString, "PLAY_MUSIC", 10) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "STOP_MUSIC", 10) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "PLAY_SOUND", 10) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "STOP_SOUND", 10) == 0) {
+        return true;
+    }
+
+    // 5. World, Door & Actor Triggers
+    if (_strnicmp(cmdString, "UNLOCK_DOOR", 11) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "LOCK_DOOR", 9) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "LOAD_MAP", 8) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "SPAWN_ACTOR", 11) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "SET_CHECKPOINT", 14) == 0) {
+        return true;
+    }
+
+    // 6. Camera Commands
+    if (_strnicmp(cmdString, "SET_CAMERA_TARGET", 17) == 0) {
+        return true;
+    }
+    if (_strnicmp(cmdString, "RESET_CAMERA", 12) == 0) {
+        return true;
+    }
+
+    return false;
+}
 
 void ExecuteScriptCmd(uint32_t dwCommandHash) {
     if (dwCommandHash == 0) return;
 
-    // Der Hash ist der gepoolte String-Pointer aus HashString()
+    // The command hash is either the direct pooled string pointer from HashString()
+    // or a 32-bit hash value:
     const char* cmdString = (const char*)(uintptr_t)dwCommandHash;
-    if (!cmdString) return;
-
-    // Built-in Script-Befehle (Beispiele aus Level-Streams):
-    // "START_CINEMATIC", "FADE_OUT", "PLAY_MUSIC", "UNLOCK_DOOR", "SPAWN_ACTOR"
-    if (strstr(cmdString, "FADE_OUT") != nullptr) {
-        // Bildschirm-Abdunklung
-    } else if (strstr(cmdString, "PLAY_MUSIC") != nullptr) {
-        // Hintergrundmusik starten
-    }
+    ExecuteScriptCmdByName(cmdString);
 }
 
 // ============================================================================

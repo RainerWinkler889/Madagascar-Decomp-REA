@@ -16,6 +16,8 @@
 #include "rw_sdk.h"
 #include "rws_core.h"
 #include "script_and_ui.h"
+#include "audio_and_frame.h"
+#include "player_and_actors.h"
 
 // ============================================================================
 // Global State Variables (Addresses in Game.exe .data)
@@ -52,47 +54,11 @@ static int32_t s_nCurrentLevelID = 0; // 0x00606A38
 int32_t g_nActiveWorldCount = 0; // 0x00602EA0
 
 // ============================================================================
-// Forward Declarations of Local Engine Subsystem Callbacks
+// Forward Declarations of Local Screenshot / Image Callbacks
 // ============================================================================
-
-// 0x00462700: Check if game engine is paused
-typedef int32_t (*IsEnginePausedFn)();
-
-// 0x004610B0: Pre-tick update: physics, input, controller polling
-typedef int32_t (*PreTickUpdateFn)();
-
-// 0x00463030: Begin frame render target setup
-typedef void (*BeginFrameRenderFn)();
-
-// 0x004476F0: Audio subsystem stream update (BGM .krn & Bink audio)
-typedef void (*UpdateAudioStreamsFn)();
-
-// 0x00551380: RenderWare Collision & Physics Solver tick
-typedef void (*SolvePhysicsAndCollisionsFn)();
-
-// 0x00428270: Hierarchical Animation (HAnim) & Skeleton bone updates
-typedef void (*UpdateHAnimSkeletonsFn)();
-
-// 0x004614D0: Check if state change / level transition / pause was requested
-typedef char (*CheckStateChangeRequestFn)();
-
-// 0x00463070: End frame render & buffer cleanup
-typedef void (*EndFrameRenderFn)();
-
-// 0x00461880: Post-tick frame step
-typedef void (*PostTickFrameStepFn)();
-
-// 0x00461AE0: Check if debug HUD / FPS overlay is enabled
-typedef char (*IsDebugHUDEnabledFn)();
-
-// 0x00462720: Show Camera Raster / Present backbuffer (RwCameraShowRaster)
-typedef void (*PresentCameraRasterFn)();
 
 // 0x00445910: Check free disk space in bytes
 typedef int32_t (*CheckFreeDiskSpaceFn)(int32_t driveId);
-
-// 0x00462660: Get current active camera instance
-typedef RwCamera* (*GetActiveCameraFn)();
 
 // 0x004E34A0: RwImageCreate(width, height, depth)
 typedef RwImage* (*RwImageCreateFn)(RwInt32 width, RwInt32 height, RwInt32 depth);
@@ -248,19 +214,19 @@ void MainGameTick() {
     // Assembler 0x004620eb - 0x00462116:
     // Wenn deltaTime > 0.0f ODER (deltaTime == 0.0f && !IsEnginePaused()):
     // Springe zu 0x004624b0 (Simulations-Schleife)
-    if ((deltaTime > 0.0f) || (deltaTime == 0.0f && ((IsEnginePausedFn)0x00462700)() == 0)) {
+    if ((deltaTime > 0.0f) || (deltaTime == 0.0f && IsEnginePaused() == 0)) {
         // Simulations-Schleife über alle Substeps (0x004624b0)
         do {
-            int32_t bCanTick = ((PreTickUpdateFn)0x004610B0)(); // 0x004610B0
+            int32_t bCanTick = PreTickUpdate(); // 0x004610B0
             if (bCanTick != 0) {
                 // Begin Frame Render Target Setup
-                ((BeginFrameRenderFn)0x00463030)(); // 0x00463030
+                BeginFrameRender(); // 0x00463030
 
                 // Dispatch RWS "iMsgRunningTick"
                 BroadcastRunningTick(szBuildString, 0); // 0x00461E80
 
                 // Update Sound Subsystem
-                ((UpdateAudioStreamsFn)0x004476F0)(); // 0x004476F0
+                UpdateAudioStreams(); // 0x004476F0
 
                 // Dispatch RWS Event Queue (0x0062FEC8)
                 DispatchRWSMessages((void*)0x0062FEC8); // 0x005502C0
@@ -269,23 +235,23 @@ void MainGameTick() {
                 UpdateRWSEntities(); // 0x0054FF60
 
                 // Solve Collisions & Dynamics
-                ((SolvePhysicsAndCollisionsFn)0x00551380)(); // 0x00551380
+                SolvePhysicsAndCollisions(); // 0x00551380
 
                 // Update Skeletal Hierarchies
-                ((UpdateHAnimSkeletonsFn)0x00428270)(); // 0x00428270
+                UpdateHAnimSkeletons(); // 0x00428270
 
                 // Prüfe, ob Pause- oder Level-Wechsel ansteht
-                char bStateChanged = ((CheckStateChangeRequestFn)0x004614D0)(); // 0x004614D0
+                char bStateChanged = CheckStateChangeRequest(); // 0x004614D0
                 if (bStateChanged != '\0') {
                     s_bFPSBoxInitialized = 0;
                     BroadcastModeChange(szBuildString, 0); // 0x00461BD0
                     Sleep(200);
-                    ((EndFrameRenderFn)0x00463070)(); // 0x00463070
+                    EndFrameRender(); // 0x00463070
                     return; // 0x0046252c: Sprungziel bei Modus-Wechsel
                 }
             }
 
-            ((PostTickFrameStepFn)0x00461880)(); // 0x00461880
+            PostTickFrameStep(); // 0x00461880
             substeps--;
         } while (substeps > 0);
 
@@ -312,7 +278,7 @@ void MainGameTick() {
     // ========================================================================
     // 2. FPS & Build FC 25 Text Overlay
     // ========================================================================
-    if (((IsDebugHUDEnabledFn)0x00461AE0)() != '\0') {
+    if (IsDebugHUDEnabled() != '\0') {
         uint32_t currentFps = s_dwInstantFPS;
         if (currentFps == 0) {
             currentFps = s_dwAveragedFPS;
@@ -339,7 +305,7 @@ void MainGameTick() {
     }
 
     // 3. RenderWare Backbuffer anzeigen (RwCameraShowRaster)
-    ((PresentCameraRasterFn)0x00462720)(); // 0x00462720
+    PresentCameraRaster(); // 0x00462720
 
     // ========================================================================
     // 4. Screenshot Handler (F12)
@@ -348,7 +314,7 @@ void MainGameTick() {
         // Prüfe freien Speicherplatz (min. 8000 KB ~ 8 MB)
         int32_t freeKb = ((CheckFreeDiskSpaceFn)0x00445910)(1);
         if (freeKb > 7999) {
-            RwCamera* camera = ((GetActiveCameraFn)0x00462660)();
+            RwCamera* camera = GetActiveCamera(); // 0x00462660
             if (camera != nullptr && camera->frameBuffer != nullptr) {
                 RwRaster* raster = camera->frameBuffer;
 

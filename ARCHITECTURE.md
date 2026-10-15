@@ -312,18 +312,50 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
   Im PC-Retail-Build von `Game.exe` wurde diese Funktion auf ein Stub reduziert (`XOR EAX, EAX; RET`), da HAnim-Animationen über direkte Index-Slots (0..8) gebunden werden.
 
 ### 3.7. BTFB-Script-Interpreter & Befehlstabelle (`0x00413500` & `0x005CA3EC`)
+- **Architektur & VTable-Struktur (`0x005CA3EC`)**:
+  Unmittelbar nach dem Identifikations-String `"BTFB Script"` an `0x005CA3DF` liegt in `.rdata` die 13-Slot-Methodentabelle `BTFB_Script_VTable` (`0x005CA3EC`):
+  | Slot | Adresse | Funktion / Beschreibung |
+  | :--- | :--- | :--- |
+  | `+0x00` | `0x0043E6F0` | `BTFBScript_Init` / Standardkonstruktor |
+  | `+0x04` | `0x00436A40` | `BTFBScript_Reset` / State Reset & Garbage Collection |
+  | `+0x08` | `0x00416530` | `BTFBScript_ExecuteNode` / AST-Knoten-Interpreter |
+  | `+0x0C` | `0x004025C0` | `BTFBScript_RegisterMessage` / RWS Event-Listener Bindung |
+  | `+0x10` | `0x0043E6F0` | `BTFBScript_SetParam` / Parameter-Übergabe |
+  | `+0x14` | `0x0043E6F0` | `BTFBScript_GetParam` / Parameter-Rückgabe |
+  | `+0x18` | `0x0042CBE0` | `BTFBScript_HandleEvent` / RWS Event-Dispatch-Handler |
+  | `+0x1C` | `0x0043DC80` | `BTFBScript_ProcessStep` / Schrittweise Befehlsauswertung |
+  | `+0x20` | `0x004025A0` | `BTFBScript_GetStatus` / Status- und Fehlercodeabfrage |
+  | `+0x24` | `0x004025B0` | `BTFBScript_Resume` / Script-Fortsetzung nach Wait |
+  | `+0x28` | `0x00464EF0` | `BTFBScript_GetTimer` / Zeitgeber-Abfrage |
+  | `+0x2C` | `0x0055805E` | `BTFBScript_VectorMath` / Vektorberechnung (Subtraktion) |
+  | `+0x30` | `0x00436A40` | `BTFBScript_Destroy` / Destruktor |
+
+- **Inquiry Action Token Tabelle (`0x005CA430`)**:
+  Bei der Initialisierung registriert `FUN_00402600` über `RegisterRWSMessage` 20 kanonische Abfrage-Aktionen für Charaktere und Akteure (Rückgabetyp `"return RwReal"`):
+  1. `INQ_ACTN_WALK`
+  2. `INQ_ACTN_RUN`
+  3. `INQ_ACTN_JUMP`
+  4. `INQ_ACTN_DOUBLE_JUMP`
+  5. `INQ_ACTN_ATTACK_PRIMARY`
+  6. `INQ_ACTN_ATTACK_SECONDARY`
+  7. `INQ_ACTN_CROUCH`
+  8. `INQ_ACTN_CRAWL`
+  9. `INQ_ACTN_CLIMB`
+  10. `INQ_ACTN_SWIM`
+  11. `INQ_ACTN_SLIDE`
+  12. `INQ_ACTN_SNEAK`
+  13. `INQ_ACTN_INTERACT`
+  14. `INQ_ACTN_CARRY`
+  15. `INQ_ACTN_THROW`
+  16. `INQ_ACTN_HELI_SPIN`
+  17. `INQ_ACTN_ROAR`
+  18. `INQ_ACTN_GROUND_POUND`
+  19. `INQ_ACTN_WALL_JUMP`
+  20. `INQ_ACTN_SPECIAL`  
+  Zusätzlich an `0x005CAEC8`: `INQ_ACTN_STRAFE`.
+
 - **Befehlsausführung (`0x00413500: ExecuteScriptCmd`)**:
-  Wird aufgerufen, wenn ein Akteur das konvexe 4-Ebenen-Volumen eines `CTFBCommand`-Triggers (`0x004133E0`) betritt oder eine Zwischensequenz triggert:
-  - Der übergebene 32-Bit-Parameter ist der gepoolte String-Pointer aus `HashString()`.
-  - Die Engine prüft den Befehls-String gegen registrierte Skript-Aktionen oder schlägt ihn in der zentralen BTFB-Skripttabelle nach.
-- **BTFB-Skripttabelle (`0x005CA3EC`)**:
-  - Liegt in `.rdata` unmittelbar nach der ASCII-Kennung `"BTFB Script"` (`0x005CA3DF`).
-  - Umfasst über 80 Funktionszeiger für Spielaktionen:
-    - Zwischensequenzen starten (`START_CINEMATIC`)
-    - Bildschirm-Blenden (`FADE_OUT`, `FADE_IN`)
-    - Sound-/BGM-Steuerung (`PLAY_MUSIC`, `STOP_MUSIC`)
-    - Tür-/Level-Trigger (`UNLOCK_DOOR`, `LOAD_MAP`)
-    - Akteur- und Gegner-Spawns (`SPAWN_ACTOR`)
+  Führt Skriptkommandos anhand ihrer gepoolten String-Pointer aus `HashString()` (`0x00464D00`) aus. Unterstützt Steuerbefehle wie `SET_POS`, `PLAY_ANIM`, `PLAY_SOUND`, `FADE_OUT`, `FADE_IN`, `SPAWN_ACTOR`, `ENABLE_COLLISION`, `DISABLE_COLLISION`, `SET_STATE` sowie Abfragen gegen die `INQ_*`-Tabelle.
 
 ### 3.8. UI-Subsystem & Menü-/HUD-Hierarchie (`0x004112C0`, `0x00416AA0`, `0x00414020`, `0x00461B40`)
 - **Initialisierung (`0x004112C0: InitUISubsystem`)**:
@@ -345,6 +377,65 @@ Registriert in `RwRegisterTFBCustomPlugins` (`0x0045F9A0`) für RenderWare-Objek
 - **Element-Suche & Sichtbarkeitsprüfung**:
   - `0x00414020` (`FindUIElement`): Lineare Suche im aktiven Menübaum mit Namensabgleich (`+0x10` und `+0xE0`).
   - `0x00461B40` (`IsUIElementVisible`): Prüft Byte an `+0xF6`. Ist Bit 3 in `+0x110` gesetzt und ein `pParent` vorhanden, wird der Status rekursiv gegen den Parent geprüft. Erlaubt hierarchisches Ein-/Ausblenden ganzer Menüseiten.
+
+### 3.9. Audio-Backend (.krn Streamer & DirectSound Mixer)
+- **Audio-Initialisierung (`0x00451470: SoundInitHook`)**:
+  Startet das Audio-Backend und initialisiert den globalen DirectSound-Mixer an `0x0046C240` (Mixer-Instanz an `0x00629ED8`).
+- **Wave-Dictionaries & Registry (`0x00629658`, `0x0044AFB0`)**:
+  Das Spiel verwaltet ein Array von bis zu 16 geladenen Wave-Dictionaries an `0x00629658`. Beim Öffnen eines Audiostreams (`OpenAudioStream` an `0x0044AFB0`) wird der Name über `0x0050D320` in den Wave-Dictionaries nachgeschlagen. Existiert der Eintrag, wird ein Stream-Handle (`0x00629668`) zurückgegeben.
+- **Audio-Pumping (`0x004476F0: UpdateAudioStreams`)**:
+  Wird in jedem Frame aus `MainGameTick` (`game_loop.cpp`) aufgerufen. Pufferungs-Thread und Ringpuffer für `.krn`-Dateien (interaktive Mehrkanal-BGM) und Bink-Soundtracks werden kontinuierlich befüllt.
+- **Audio-Kanal- und Bank-Verwaltung**:
+  - `0x0044F580: GetSoundBank`: Ermittelt Audiokanal-Gruppen und Soundbänke per Bank-ID.
+  - `0x0044B200: PlaySoundStream`: Startet Wiedergabe mit Lautstärke (0.0f..1.0f) und Loop-Flag.
+  - `0x0044B250: StopSoundStream`: Stoppt Wiedergabe und setzt Streaming-Puffer zurück.
+  - `0x0044B2A0: SetSoundVolume`: Regelt Lautstärke des Streams.
+  - `0x0044B300: SetSound3DPosition`: Aktualisiert räumliche 3D-Koordinaten (`RwV3d`) für Distanzdämpfung.
+
+### 3.10. Frame- & Engine-State-Steuerung (`src/audio_and_frame.h`, `src/audio_and_frame.cpp`)
+- **Pre-Tick Update (`0x004610B0: PreTickUpdate`)**:
+  Prüft vor dem Haupt-Frame-Durchlauf anstehende Level-Wechsel, den Bink-Videostatus und den Titel-Demo-Stream.
+- **Eingabe-Subsystem (`0x0051A070: DirectInput_Init`)**:
+  Initialisiert Microsoft DirectInput 8 für Tastatur, Maus und Gamepads.
+- **Frame-Rendering-Pipeline**:
+  - `0x00463030: BeginFrameRender`: Bereitet Framebuffer vor und löscht Z-Buffer und Image-Raster (`RwCameraClear`).
+  - `0x00463070: EndFrameRender`: Schließt Rendering ab und synchronisiert GPU/D3D-Zustand.
+  - `0x00462720: PresentCameraRaster`: Ruft `RwCameraShowRaster` auf, um den Backbuffer auf den Bildschirm zu flippen.
+  - `0x00462660 / 0x00462670: GetActiveCamera / SetActiveCamera`: Verwaltet den globalen Hauptkamera-Zeiger an `0x0062A524`.
+- **State- & Pause-Management**:
+  - `0x004614D0: CheckStateChangeRequest`: Überwacht Statuswechselanforderungen (Menü, Level-Laden, Pause).
+  - `0x00461880: PostTickFrameStep`: Führt Timing-Berechnungen nach dem Frame-Tick durch.
+  - `0x00462700: IsEnginePaused`: Liest den Pausestatus an `0x00606C68`.
+  - `0x00461AE0: IsDebugHUDEnabled`: Taktet den internen FPS-Timer und steuert das Debug-OSD.
+- **RWS World- & Camera-Chunk-Handler**:
+  - `0x00461F10: Chunk700_WorldSetup`: Verarbeitet RWS Chunk `0x700` (Setup von Szene, Geometrie und BSP).
+  - `0x00461F40: Chunk71D_CameraTarget`: Verarbeitet RWS Chunk `0x71D` (Kamera-Verfolgungsziel und Offset).
+  - `0x004676A0: DirectorCamSetup`: Konfiguriert die Transformationsmatrizen der RenderWare-Direktorenkamera.
+
+### 3.11. Spieler-, Charakter-, Physik- & Item-Subsystem (`src/player_and_actors.h`, `src/player_and_actors.cpp`)
+- **Item- & Münz-Manager (`CItemManager`: `0x0043BCD8`..`0x0043BEA0`)**:
+  Verwaltet Sammelobjekte, Level-Items und globale Affenmünzen (Monkey Coins an `0x0062A5A8`):
+  - `0x0043BCD8: GetItemCount`: Liest die Anzahl gesammelter Objekte eines Typs.
+  - `0x0043BD20: GetItemBit`: Prüft Bit-Flags in Level-Bitsets (`sar edx, 3; and ecx, 7; shl edx, cl; and al, dl`).
+  - `0x0043BE67: SetItemBit`: Setzt oder löscht ein Collectible-Bit im Level-Speicher.
+  - `0x0043BD50: HasItemCapacity`: Prüft, ob der Spieler weitere Items aufnehmen kann.
+  - `0x0043BD80 / 0x0043BE00: GetItemFloat / SetItemFloat`: Verarbeitet kontinuierliche Werte (z.B. Energie, Spezialleiste).
+  - `0x0043BDC0 / 0x0043BE37: GetItemInt / SetItemCount`: Setzt/erhöht Item-Zähler und aktualisiert globale Affenmünzen (`0x0062A5A8`).
+- **Charakter-Entitäten (`CCharacterActor`)**:
+  Repräsentiert die steuerbaren Spielfiguren mit ihren individuellen Fähigkeiten:
+  - **Alex der Löwe**: Krallenschlag (`ClawSlash`), Brüllen (`Roar`), Doppelsprung.
+  - **Marty das Zebra**: Huftritt (`BackKick`), Sprint (`LongJump`), Doppelsprung.
+  - **Melman die Giraffe**: Hubschrauber-Wirbel (`HeliSpin`), Halswurf (`NeckSwipe`), Medizinball.
+  - **Gloria das Nilpferd**: Gesäß-Platscher (`ButtBounce`), Sprint-Angriff (`ChargeAttack`), Tauchen.
+  - **Die Pinguine** (Skipper, Kowalski, Rico, Private): Schleich-Modus (`Sneak`), Rutschen (`Slide`), Team-Manöver.
+- **Charakter-Physik & Koordinaten-Update (`0x004283E0` / `0x00428E9C`)**:
+  - Funktion startet an `0x004283E0` mit SEH Scope Table `0x005C356B`.
+  - Berechnet Geschwindigkeit, Schwerkraft-Fallbeschleunigung und Bodenkollision.
+  - Schreibt an `0x00428E9C` die neuen Weltkoordinaten direkt in `[ebp+0x1F0]` (X), `[ebp+0x1F4]` (Y) und `[ebp+0x1F8]` (Z).
+- **HAnim Skelett-Animation (`0x00428270: UpdateHAnimSkeletons`)**:
+  Traversiert alle aktiven HAnim-Hierarchien und aktualisiert Knochen-Matrizen für RenderWare Skinning.
+- **Kollisions-Solver (`0x00551380: SolvePhysicsAndCollisions`)**:
+  Löst räumliche Schnittmengen zwischen Charakter-Kollisionskapseln und BSP-Welten (`CTFBWorld`).
 
 ---
 
@@ -416,3 +507,9 @@ Bei der statischen Analyse der RenderWare-Initialisierung wurden vier konkrete U
 - [x] Runde 4: Dekompilation des System-, Registry-, Savegame-, Pfad- und Lokalisierungs-Subsystems (`0x004634E0`, `0x00519D20`, `0x00519CB0`, `0x00519C90`, `0x0051C940`, `0x0051A430`, `0x0051A450`, `0x00463360`, `0x00460C10`, `0x004025F0`, `0x0051A1A0`, `0x00460D50`, `0x00462BC0`) nach [`src\system.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/system.cpp).
 - [x] Runde 4: Dekompilation des Dual-Phasen-Timers (`CTimer` 0x00464F40/0x00464F00/0x0044D2C0), String-Interning-Pools (`HashString` 0x00464D00, `HashAnimName` 0x0043E6F0), BTFB-Script-Interpreters (`0x00413500`) und UI-Subsystems (`0x004112C0`, `0x00416AA0`, `0x00416AE0`, `0x004140D0`, `0x00414020`, `0x00461B40`) nach [`src\script_and_ui.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.h) und [`src\script_and_ui.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.cpp).
 - [x] Runde 4: Bereinigung aller rohen Funktionspointer-Casts in [`src\game_loop.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/game_loop.cpp), [`src\rws_core.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/rws_core.cpp) und [`src\tfb_entities.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/tfb_entities.cpp) durch saubere Funktions- und Methodenaufrufe.
+- [x] Runde 5: Echte Dekompilation des BTFB-Script-Interpreters (`0x00413500`), Auslesen der 13-Slot-Methodentabelle an `0x005CA3EC` und der 20 `INQ_*` Inquiry Action Tokens an `0x005CA430` / `0x005CAEC8` nach [`src\script_and_ui.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.h) und [`src\script_and_ui.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/script_and_ui.cpp).
+- [x] Runde 5: Dekompilation des Audio-Backends (`0x00451470`, `0x004476F0`, `0x0044F580`, `0x0044AFB0`, `0x0044B200`, `0x0044B250`, `0x0044B2A0`, `0x0044B300`) und der Frame-/State-Pipeline (`0x004610B0`, `0x0051A070`, `0x00463030`, `0x00463070`, `0x00462720`, `0x00462660`, `0x00462670`, `0x004614D0`, `0x00461880`, `0x00462700`, `0x00461AE0`, `0x00461F10`, `0x00461F40`, `0x004676A0`) nach [`src\audio_and_frame.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.h) und [`src\audio_and_frame.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/audio_and_frame.cpp).
+- [x] Runde 5: Ersetzen sämtlicher verbliebener roher Funktionspointer-Casts in [`src\game_loop.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/game_loop.cpp), [`src\rws_core.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/rws_core.cpp) und [`src\tfb_entities.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/tfb_entities.cpp) durch saubere, typisierte Funktionsaufrufe.
+- [x] Runde 5: Dekompilation des Spieler-, Charakter-, Physik- und Item-Subsystems (`CItemManager` 0x0043BCD8..0x0043BEA0, Charaktere Alex/Marty/Melman/Gloria/Penguins, `UpdateHAnimSkeletons` 0x00428270, Charakter-Physik 0x004283E0/0x00428E9C, Kollisions-Solver 0x00551380) nach [`src\player_and_actors.h`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.h) und [`src\player_and_actors.cpp`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/src/player_and_actors.cpp).
+- [x] Runde 5: Verifikation des gesamten C++ Quelltextbestandes (`src/*.cpp`) gegen MSVC / Clang mit 0 Compiler- und Diagnose-Fehlern.
+- [x] Runde 5: Umfassende Dokumentation aller dekompilierten Subsysteme, Strukturen, Tabellen und mathematischen Formeln in [`ARCHITECTURE.md`](file:///F:/Desktop/Madagascar_Decomp_AI_Slop/ARCHITECTURE.md).

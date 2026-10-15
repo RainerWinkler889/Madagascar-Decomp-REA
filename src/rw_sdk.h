@@ -229,6 +229,12 @@ struct RwCamera {
     RwFrame*            frame;
 };
 
+enum RwCameraClearModes {
+    rwCAMERACLEARIMAGE    = 0x1,
+    rwCAMERACLEARZ        = 0x2,
+    rwCAMERACLEARSTENCIL  = 0x4
+};
+
 // ============================================================================
 // Stream Subsystem
 // ============================================================================
@@ -346,6 +352,12 @@ RwCamera* RwCameraSetViewWindow(RwCamera* camera, const RwV2d* viewWindow);
 
 // 0x004D9750: Attach coordinate Frame to Camera
 RwCamera* RwCameraSetFrame(RwCamera* camera, RwFrame* frame);
+
+// 0x004D5810: Clear camera frame and/or z-buffer
+RwCamera* RwCameraClear(RwCamera* camera, RwRGBA* colour, RwInt32 clearFlags);
+
+// 0x004D6000: Present/Display camera raster
+RwCamera* RwCameraShowRaster(RwCamera* camera, void* pDev, RwUInt32 flags);
 
 // 0x004D8D40: Create a new transformation Frame
 RwFrame* RwFrameCreate(void);

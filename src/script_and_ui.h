@@ -81,11 +81,72 @@ uint32_t HashString(const char* str);
 uint32_t HashAnimName(const char* animName);
 
 // ============================================================================
-// 3. BTFB Script Interpreter
+// 3. BTFB Script Interpreter & Command Table
+//
+// Reconstructed from Game.exe:
+//   - 0x005CA3DF: ASCII Identifier "BTFB Script"
+//   - 0x005CA3EC: Virtual method table (13 function pointers)
+//   - 0x005CA430: Canonical BTFB Script Inquiry tokens (INQ_*)
+//   - 0x00413500: ExecuteScriptCmd / BTFB Script Command Dispatcher
 // ============================================================================
+
+// BTFB Script Inquiry Action Identifiers
+enum EBTFBScriptInquiry {
+    BTFB_INQ_ACTN_START = 0,
+    BTFB_INQ_ACTN_SELECT,
+    BTFB_INQ_ACTN_TRICK,
+    BTFB_INQ_ACTN_FIRE,
+    BTFB_INQ_ACTN_JUMP,
+    BTFB_INQ_ACTN_DODGE,
+    BTFB_INQ_SHOULDER_LEFT,
+    BTFB_INQ_SHOULDER_RIGHT,
+    BTFB_INQ_ACTN_SHOULDER_L2,
+    BTFB_INQ_ACTN_SHOULDER_R2,
+    BTFB_INQ_ACTN_PAD_L,
+    BTFB_INQ_ACTN_PAD_R,
+    BTFB_INQ_ACTN_PAD_U,
+    BTFB_INQ_ACTN_PAD_D,
+    BTFB_INQ_ACTN_TURN,
+    BTFB_INQ_ACTN_FWD,
+    BTFB_INQ_LPAD_BUTTON,
+    BTFB_INQ_CAMERA_ROTATE,
+    BTFB_INQ_CAMERA_PITCH,
+    BTFB_INQ_RPAD_BUTTON,
+    BTFB_INQ_ACTN_STRAFE,
+    BTFB_INQ_COUNT
+};
+
+// 13-slot virtual function table of CBTFBScript (0x005CA3EC)
+struct CBTFBScriptVTable {
+    void* pfnQueryState;      // Slot 0: 0x0043E6F0 (Default returns 0)
+    void* pfnInvoke;          // Slot 1: 0x00436A40 (Virtual invocation dispatch)
+    void* pfnNopReturn0;      // Slot 2: 0x00416530 (NOP / returns 0)
+    void* pfnDestructor;      // Slot 3: 0x004025C0 (Scalar deleting destructor)
+    void* pfnReserved4;       // Slot 4: 0x0043E6F0
+    void* pfnReserved5;       // Slot 5: 0x0043E6F0
+    void* pfnGetType;         // Slot 6: 0x0042CBE0 (Returns 2 = BTFB_SCRIPT_TYPE)
+    void* pfnReset;           // Slot 7: 0x0043DC80 (Reset target pointer)
+    void* pfnNopRet8;         // Slot 8: 0x004025A0 (NOP ret 8)
+    void* pfnGetThis;         // Slot 9: 0x004025B0 (Identity: returns this)
+    void* pfnNopRet;          // Slot 10: 0x00464EF0 (NOP ret)
+    void* pfnCleanup;         // Slot 11: 0x0055805E (RTTI cleanup)
+    void* pfnDispatch;        // Slot 12: 0x00436A40 (Virtual dispatch)
+};
+
+// Access the global BTFB Script VTable instance (0x005CA3EC)
+const CBTFBScriptVTable* GetBTFBScriptVTable();
+
+// Lookup token name for inquiry index
+const char* GetBTFBScriptInquiryName(EBTFBScriptInquiry inq);
+
+// Lookup inquiry index by token name
+int32_t FindBTFBScriptInquiry(const char* name);
 
 // 0x00413500: Führt ein BTFB-Script-Kommando anhand seines Befehls-Hashes aus
 void ExecuteScriptCmd(uint32_t dwCommandHash);
+
+// Führt ein BTFB-Script-Kommando anhand seines Textnamens aus
+bool ExecuteScriptCmdByName(const char* cmdName);
 
 // ============================================================================
 // 4. UI-Subsystem
